@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<!-- Nomad Gallery — NDJSON /Gallery support (viewport-throttled thumbnails, cached) -->
+<!-- Nomad Gallery -->
 <html lang="en">
 <head>
   <meta charset="utf-8" />
@@ -149,7 +149,7 @@ function applyThemeFlag(dark){
 (function initThemeFromStorage(){
   try{ const saved = localStorage.getItem(THEME_KEY); applyThemeFlag(saved === 'true'); } catch(e){ applyThemeFlag(false); }
 })();
-// listen for theme changes in other tabs/pages (keeps pages in sync)
+// listen for theme changes in menu (keeps pages in sync)
 window.addEventListener('storage', (ev) => {
   if(ev.key === THEME_KEY){
     const dark = ev.newValue === 'true';

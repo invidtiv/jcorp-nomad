@@ -57,7 +57,7 @@
 
   /* modals */
   .modal,.episode-modal,.video-modal{display:none;position:fixed;inset:0;background:rgba(0,0,0,0.55);justify-content:center;align-items:center;z-index:1000;padding:20px;}
-  /* fixed modal size: we lock modal max height so video won't push it beyond viewport */
+  /* fixed modal size: lock modal max height so video won't push it beyond viewport */
   .modal-content,.episode-modal-content{background:#fff;padding:18px;border-radius:12px;text-align:center;width:94%;max-width:980px;box-shadow:0 12px 44px rgba(0,0,0,0.12);max-height:90vh;overflow:auto}
   .video-modal-content{
     background:#111;
@@ -168,7 +168,7 @@ const ROOT_PATH = '/Shows';
 const INDEX_ENDPOINT = '/api/index';
 const MEDIA_ENDPOINT = '/media';
 
-/* shared resume store (same as movies) */
+/* shared resume store (same as movies) > Subtitles are coming soon!!! */
 const RESUME_KEY = 'nomad:watch:v1';
 const ANIM_KEY_BASE = 'nomad:shows:anim:v1';
 
@@ -176,7 +176,7 @@ const VIDEO_EXTS = ['.mp4','.mkv','.avi','.mov','.webm','.m4v'];
 const IMAGE_EXTS = ['.jpg','.jpeg','.png','.webp','.avif'];
 const SUB_EXTS = ['.srt','.vtt','.ass','.ssa','.sub'];
 
-/* ---------------- THEME: respect menu-controlled dark mode (no button) ---------------- */
+/* ---------------- THEME: +dark mode ---------------- */
 const THEME_KEY = 'nomad_dark_mode';
 
 function applyThemeFlag(dark){
@@ -258,7 +258,7 @@ function applyThemeFlag(dark){
       }
     });
 
-    // Episode list and rows (fix white background in dark mode)
+    // Episode list and rows (fixed white background in dark mode)
     document.querySelectorAll('.episode-list').forEach(el => {
       if(dark){
         el.style.background = '#071722';
@@ -712,14 +712,13 @@ function renderGrid(){
   if(filtered.length === 0){ gridEl.innerHTML = '<p style="grid-column:1/-1;text-align:center;color:var(--primary-dark);">No shows found.</p>'; return; }
   for(const show of filtered){
     const card = document.createElement('div'); card.className='media-card';
-    // helpful hook for single-card updates:
     try { card.dataset.dir = normalizePath(show.dir || ''); } catch(e){ card.dataset.dir = show.dir || ''; }
 
     const thumb = document.createElement('div'); thumb.className='thumb-wrapper';
     const fallback = document.createElement('span'); fallback.className='fallback-text'; fallback.textContent = show.name;
     thumb.appendChild(fallback);
 
-    // If all episodes are completed (and we have loaded them), show only "Completed"
+    // If all episodes are completed, show "Completed"
     if(show._loaded && isShowFullyCompleted(show)){
       thumb.appendChild(createMarqueeElement('Completed'));
     } else {
@@ -794,7 +793,6 @@ function closeActionModal(){ actionModal.style.display='none'; }
 actionModal.addEventListener('click', (e)=>{ if(e.target===actionModal) closeActionModal(); });
 actionCloseBtn.addEventListener('click', closeActionModal);
 
-/* closeVideo optionally avoids autosave (used when marking completed to avoid overwriting) */
 function closeVideo(doSave=true){
   try{ if(doSave) saveNow(); }catch(e){}
   detachVideoListeners();
@@ -919,7 +917,6 @@ function startDownload(ep){
   a.remove();
 }
 
-/* Player wiring & logic (no auto-advance on ended — we close and mark completed) */
 let stallTimer=null, stallRetries=0;
 let _meta=null, _pause=null, _seek=null, _ended=null;
 
@@ -1027,7 +1024,7 @@ function handleEpisodeEnded(){
 
   const nextIdx = curIdx + 1;
   if(Array.isArray(flattenedEpisodes) && nextIdx < flattenedEpisodes.length){
-    // Auto-advance: reuse nextEpisode() logic so behavior is identical to manual Next button
+    // Auto-advance: reused nextEpisode() logic so behavior is identical to manual Next button
     // Set currentEpisodeIndex correctly and call nextEpisode() which will update UI/resume.
     currentEpisodeIndex = curIdx; // ensure nextEpisode computes next from the right base
     try {
@@ -1189,7 +1186,7 @@ async function loadLibrary(){
   gridEl.innerHTML = '<p style="grid-column:1/-1;text-align:center;color:var(--primary-dark);">Unable to load content.</p>';
 }
 
-/* Handle incoming hash like #open=%2FShows%2FShowName%2FS1%20E1.mp4
+/* Handle incoming hash, EG: #open=%2FShows%2FShowName%2FS1%20E1.mp4
 */
 async function handleHashOpenIfPresent(){
   try {
@@ -1242,7 +1239,7 @@ async function handleHashOpenIfPresent(){
       return;
     }
 
-    // Otherwise treat open as an explicit episode/file request (existing behavior preserved)
+    // Otherwise treat open as an explicit episode/file request
     // Attempt to find the parent show (first two segments)
     if(parts.length < 3){
       // not enough info to identify an episode; clear hash and exit
@@ -1278,11 +1275,9 @@ async function handleHashOpenIfPresent(){
     const idx = findIndexForPathOrBasename(openPath);
     const ep = (idx !== undefined && idx !== null) ? flattenedEpisodes[idx] : null;
 
-    // Preserve prior behavior: if a specific episode was requested, open it in the player (resume)
     if(ep){
       openVideo(fileUrl(ep.path), true, ep);
     } else {
-      // If we didn't find a matching episode file, try to open the provided path directly in the player.
       openVideo(fileUrl(openPath), true, { name: openPath.split('/').pop(), path: openPath });
     }
 

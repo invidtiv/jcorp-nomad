@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width,initial-scale=1" />
 <title>Nomad • Playlists</title>
 
-<!-- Quick theme bootstrap: read dataset.theme and nomad_dark_mode, then fallback to prefers-color-scheme -->
+<!-- theme bootstrap: read dataset.theme and nomad_dark_mode, then fallback to prefers-color-scheme -->
 <script>
   (function(){
     try {
@@ -20,9 +20,6 @@
 </script>
 
 <style>
-  /* =========================
-     Core theme variables (light)
-     ========================= */
   :root{
     --primary:#007bff;
     --primary-600:#0066d6;
@@ -78,7 +75,7 @@
   header h1{font-size:1.15rem;margin:0;font-weight:700}
   .back-btn{background:rgba(255,255,255,0.12);color:#fff;padding:.45rem .7rem;border-radius:8px;text-decoration:none;font-weight:700}
 
-  /* toolbar: search takes most space, controls compact on right */
+  /* toolbar */
   .toolbar{
     background:transparent;
     padding:.6rem 14px;
@@ -135,9 +132,7 @@
   .title-row{display:flex;align-items:center;gap:8px;flex:1}
   .title-row h2{margin:0;font-size:1.05rem}
 
-  /* =========================
-     Footer player (grid controls similar to music.html)
-     ========================= */
+  /*  Footer player  */
   .player-shell{
     position:fixed;left:0;right:0;bottom:0;padding:var(--player-padding-desktop,10px);background:var(--card);border-top:1px solid rgba(0,0,0,0.04);box-shadow:0 -12px 36px rgba(10,12,20,0.08);z-index:999;display:flex;justify-content:center;
   }
@@ -187,7 +182,7 @@
   .control.secondary{background:var(--card);color:var(--primary);border:1px solid rgba(0,0,0,0.06);font-weight:700}
   .control.play{ width: calc(var(--control-size) * 1.6); border-radius:14px; font-size:18px; }
 
-  /* smaller "edge" buttons (loop & download) */
+  /* "edge" buttons (loop & download) */
   .control.edge{
     height:var(--edge-control-size);
     min-width:var(--edge-control-size);
@@ -263,7 +258,6 @@
         <span class="icon">⇅</span><span class="label">A → Z</span>
       </button>
 
-      <!-- Songs button now plain "Songs" to match Music page's Playlists button -->
       <button id="songsBtn" class="btn ghost" title="Songs">Songs</button>
     </div>
   </div>
@@ -322,9 +316,7 @@
   </div>
 
 <script>
-/* =========================
-   Playlist page JS (updated player/toolbar behavior)
-   ========================= */
+/*   Playlist page JS (updated player/toolbar behavior) */
 
 /* ---------- CONFIG ---------- */
 const ROOT = '/Music';
@@ -345,7 +337,7 @@ let currentScopePath = null;
 let currentPlaylist = [];
 let currentIndex = -1;
 
-let scopeLoopActive = true;   // loop full scope by default (user requested)
+let scopeLoopActive = true;   // loop full scope by default 
 let lastSig = null;
 let sortAsc = true;
 

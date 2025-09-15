@@ -17,7 +17,7 @@
     --line:rgba(11,18,32,0.06);
     --radius:10px;
     --header-height:64px;
-    --page-max:1400px; /* wider layout on desktop */
+    --page-max:1400px;
   }
 
   body.dark{
@@ -34,7 +34,7 @@
   body { display:flex; flex-direction:column; }
   a{color:inherit;text-decoration:none}
 
-  /* full-page background layer to avoid mobile variable bleed / white gaps */
+  /* full-page background layer to avoid mobile variable bleed / white gaps, its still a bit broken (WIP) */
   .page-bg { position:fixed; inset:0; background:var(--bg); z-index:0; pointer-events:none; transition:background .18s linear; }
 
   /* Header */
@@ -73,8 +73,8 @@
     flex-direction:column;
     min-height: calc(100vh - var(--header-height) - 36px);
     box-sizing:border-box;
-    z-index:1; /* above page-bg */
-    align-items:center; /* center content horizontally */
+    z-index:1;
+    align-items:center;
   }
   .content-area { flex: 1 1 auto; display:flex; flex-direction:column; gap:12px; width:100%; align-items:center; }
   .welcome-center { text-align:center; margin-bottom:6px; width:100%; }
@@ -179,7 +179,7 @@
   #resumePanel h3 { margin:0 0 8px; font-size:1rem; color:var(--text); }
 
   /* layout as two stacked rows (Movies, Shows). Center each row.
-     Each row will contain up to 3 fixed-size items to avoid overflow/scroll. */
+     Each row will contain up to 3 fixed-size items to avoid overflow/scroll.(WIP > Need to make this just a row not stacked) */
   .resume-list {
     display:flex;
     flex-direction:column;
@@ -228,9 +228,9 @@
   /* Hide the textual title on small screens so buttons don't overlap it */
   .brand .title { display:none !important; }
 
-  /* header buttons keep the larger touch size (from prior update) */
+  /* header buttons keep the larger touch size */
   .icon-btn {
-    width:88px;        /* ~2x desktop width */
+    width:88px;      
     height:48px;
     border-radius:10px;
     font-size:18px;
@@ -348,7 +348,7 @@ const RE_AUDIO = /\.(mp3|flac|wav|m4a|aac|ogg)$/i;
 const RE_IMAGE = /\.(jpe?g|png|webp|gif|heic|avif)$/i;
 const RE_BOOK  = /\.(pdf|epub|mobi|azw3|txt)$/i;
 
-// minimal debug logger — no visible on-page debug console
+// debug logger 
 const __debugEl = null;
 function debugLog(...args){
   try { console.debug('[NOMAD]', ...args); } catch(e){ }
@@ -378,12 +378,13 @@ const resumeList = document.getElementById('resumeList');
 const pageBg = document.querySelector('.page-bg');
 
 /* ---------------- ZIM / javascript-libzim integration ---------------- */
-/* libzim files are in /assets/kiwix/www/js/ (from your dist)
+/* libzim files are in /assets/kiwix/www/js/ 
    We prefer the wasm loader but add locateFile so Emscripten finds the .wasm.
+   This is far from working, I left this bit in, but much will need to be changed. Proof of concept did work though)
 */
 const LIBZIM_BASE = '/assets/kiwix/www/js/';
 const LIBZIM_WASM_SCRIPT = LIBZIM_BASE + 'libzim-wasm.js';
-const LIBZIM_ASM_SCRIPT  = LIBZIM_BASE + 'libzim-asm.js'; // optional fallback
+const LIBZIM_ASM_SCRIPT  = LIBZIM_BASE + 'libzim-asm.js'; 
 
 let libzimReady = null;        // Promise resolved when Module runtime is ready
 
@@ -436,13 +437,11 @@ async function loadAndOpenArchive(zimPath) {
     await loadLibZimScript();
     if (!libzimModule) throw new Error('libzim module not found after loading script');
 
-    // First, sanity-check that the browser can reach the .zim file and that server supports ranged requests.
     try {
-      // Try a HEAD first (fast)
+      // Try a HEAD first
       const head = await fetch(zimPath, { method: 'HEAD', cache: 'no-store' });
       debugLog('HEAD', zimPath, head.status, { ok: head.ok, headers: { 'accept-ranges': head.headers.get('accept-ranges'), 'content-length': head.headers.get('content-length') } });
       if (!head.ok) {
-        // Some servers don't allow HEAD — try a small ranged GET
         debugLog('HEAD not OK, trying small GET Range');
         const r = await fetch(zimPath, { method: 'GET', headers: { 'Range': 'bytes=0-1023' }, cache: 'no-store' });
         debugLog('Range GET status:', r.status, 'headers:', { 'content-range': r.headers.get('content-range'), 'accept-ranges': r.headers.get('accept-ranges') });
@@ -452,10 +451,8 @@ async function loadAndOpenArchive(zimPath) {
       }
     } catch (reachErr) {
       debugLog('ZIM reachability test failed for', zimPath, String(reachErr));
-      // continue — but inform user. Many captive portals or mis-routed requests show here.
     }
 
-    // libzim Module.loadArchive will perform network requests itself, but we log around it.
     try {
       debugLog('calling libzimModule.loadArchive with', zimPath);
       if (typeof libzimModule.loadArchive !== 'function') {
@@ -478,14 +475,6 @@ async function loadAndOpenArchive(zimPath) {
     throw e;
   }
 }
-
-/* ---------------- ZIM helper: discover ZIMs and run title suggestions ---------------- */
-
-/*
-  Query the backend for a list of available ZIMs.
-  The ESP32 endpoint is expected at "/zim-list" and to return JSON array like:
-  [ {"name":"wikipedia_en_0.8.zim","path":"/Archive/wikipedia_en_0.8.zim","size":...}, ... ]
-*/
 async function tryFetchZimList() {
   debugLog('tryFetchZimList: fetching /zim-list');
   try {
@@ -495,7 +484,7 @@ async function tryFetchZimList() {
       debugLog('/zim-list: unexpected response (not an array)');
       return [];
     }
-    // quick sanity: ensure each entry has path
+   
     for(const z of j) {
       if(!z.path) debugLog('zim entry missing path:', z);
     }
@@ -518,20 +507,18 @@ async function tryZimSuggest(term, maxResults = 20) {
     // ensure lib runtime is loaded
     await loadLibZimScript();
 
-    // ensure there's an opened archive; if not, discover ZIMs and open the first one
+    // ensure there's an opened archive, if not, discover ZIMs and open the first one
     if (!archiveLoaded) {
       const zims = await tryFetchZimList();
       if (!zims || zims.length === 0) {
         console.info('No zim files found on device');
         return [];
       }
-      // open first ZIM (you can change logic to pick language or a specific file)
       const first = zims[0];
       await loadAndOpenArchive(first.path);
       if (!archiveLoaded) return [];
     }
 
-    // Use Module.suggest (title-based suggestions). API returns an Emscripten vector
     // Use Module.suggest (title-based suggestions). API returns an Emscripten vector
     if (typeof libzimModule.suggest !== 'function') {
       console.warn('libzim suggest API not available');
@@ -566,9 +553,6 @@ async function tryZimSuggest(term, maxResults = 20) {
   }
 }
 
-/* render a ZIM results section appended under the existing resultsPanel
-   keeps ZIM results visually separate from media results (so media shows quickly).
-*/
 function renderZimResults(zrows, q) {
   if (!zrows || !zrows.length) return;
 
@@ -640,12 +624,12 @@ function classifyEntry(obj, parentBucket){
   return { kind:'file', subtype:'other', name, path, raw: obj };
 }
 
-/* ---------------- SEARCH INDEX (optimized & preview mapping) ---------------- */
+/* ---------------- SEARCH INDEX ---------------- */
 let searchIndexCache = null;
 let previewByPath = new Map();
 let previewByBaseDir = new Map();
 
-/* Deterministic fallback for preview images (useful when index lacks explicit images) */
+/* Deterministic fallback for preview images  */
 function previewPathFromItemPath(itemPath){
   if(!itemPath) return null;
   const p = normalizePath(itemPath);
@@ -911,11 +895,6 @@ function iconSVG(kind){
   return '';
 }
 
-/* marquee helper
-   Smooth continuous/back-to-back marquee with configurable gap and slower default speed.
-   This creates a unique keyframe per marquee instance so it won't snap or show a big gap.
-   Adjusted to ensure the marquee content fits inside the overlay and remains centered.
-*/
 let __marqueeCounter = 0;
 function createScrollingMarquee(text){
   const id = ++__marqueeCounter;
@@ -1098,7 +1077,6 @@ function findPreviewForResumeItem(item){
 }
 
 /* Render resume area:
-   Now arranged horizontally (row) on desktop and centered. Overlays are constrained and centered.
 */
 function renderResume(items){
   resumeList.innerHTML = '';
@@ -1149,7 +1127,6 @@ function renderResume(items){
   // Desktop: render two centered rows:
   // Row 1: Movies (up to 3)
   // Row 2: Shows  (up to 3)
-  // If neither exist, show up to 3 of other items.
   if(movies.length){
     const msec = document.createElement('div'); msec.className = 'resume-section';
     movies.forEach(it => msec.appendChild(makeResumeNode(it, false)));
@@ -1175,10 +1152,6 @@ function renderResume(items){
 }
 
 
-/* makeResumeNode: creates item and overlay (shows get the marquee)
-   overlay fade/translate transitions to feel smooth when content updates.
-   overlay is centered and constrained so marquee doesn't overflow visually.
-*/
 function makeResumeNode(it, compact=false, showMarqueeForShows=false){
   const node = document.createElement('div'); node.className = 'resume-item'; node.setAttribute('role','button');
   const thumb = document.createElement('div'); thumb.className = 'resume-thumb';
@@ -1336,9 +1309,6 @@ function renderResults(rows, q){
   resultsPanel.style.display = 'block';
 }
 
-/* Perform search across the built index (media) + asynchronously query ZIM titles
-   Media results show immediately (fast), ZIM results append when ready (non-blocking).
-*/
 // ---------- performSearch (media-first, ZIM parallel + merge) ----------
 let buildPromise = null;
 async function performSearch(q){
@@ -1363,7 +1333,7 @@ async function performSearch(q){
     return s;
   }
 
-  // Build media index and search (unchanged UX: show media fast)
+  // Build media index and search
   let mediaResults = [];
   try {
     searchLoader.style.display = 'block';
@@ -1374,7 +1344,7 @@ async function performSearch(q){
       const hay = `${(e.title||'') + ' ' + (e.path||'') + ' ' + (e.bucket||'')}`.toLowerCase();
       if(hay.includes(t)) mediaResults.push(e);
     }
-    // initial sort for immediate render (so UX stays snappy)
+    // initial sort for immediate render 
     mediaResults.sort((a,b)=>{
       const p = x => ((x.title||'').toLowerCase().startsWith(term.toLowerCase()) ? 0 : 1);
       if(p(a)!==p(b)) return p(a)-p(b);
@@ -1392,7 +1362,7 @@ async function performSearch(q){
     searchLoader.style.display = 'none';
   }
 
-  // ----------------- Kick off ZIM suggestions in parallel (non-blocking) -----------------
+  // ----------------- Kick off ZIM suggestions in parallel -----------------
   try {
     const existingZimSections = resultsPanel.querySelectorAll('[data-zim-section]');
     existingZimSections.forEach(n=>n.remove());
@@ -1445,20 +1415,15 @@ async function performSearch(q){
       renderResults(combined, q);
     } else {
       debugLog('No ZIM matches for', term);
-      // nothing to merge — keep media-only results already rendered
     }
   } catch (e) {
     console.warn('ZIM search failed', e);
   }
 
-  // return mediaResults immediately (existing callers may use this)
+  // return mediaResults immediately
   return mediaResults;
 }
 
-
-/* Result click navigation
-   Books open directly to the file.
-*/
 function onResultClick(item){
   const p = item.path || '';
   if(item.bucket === 'Files'){
@@ -1476,10 +1441,8 @@ function onResultClick(item){
   if(item.bucket === 'Music'){ window.location.href = `/music#play=${encodeURIComponent(p)}`; return; }
   if(item.bucket === 'Gallery'){ window.location.href = `/gallery#open=${encodeURIComponent(p)}`; return; }
 
-  // New: ZIM search hits — open the zimreader page with query params
+  
   if(item.bucket === 'ZIM') {
-    // item.path has the special URL:
-    // /zimreader.html?zim=<zimPath>&entry=<entryPath>
     window.location.href = item.path;
     return;
   }
@@ -1501,7 +1464,7 @@ document.addEventListener('click', (ev) => {
 /* warm index and load resume on boot */
 (function warm(){ try{ buildPromise = buildSearchIndex(); }catch(e){ console.warn('warm failed', e); } })();
 
-/* Initialize resume (render quickly, then enrich with previews after index completes) */
+/* Initialize resume */
 (async function initResume(){
   try {
     const raw = await collectResumeItems();
@@ -1515,7 +1478,7 @@ document.addEventListener('click', (ev) => {
       raw: r.raw || r
     })).filter(x => x.path);
 
-    // Render immediately (fast feedback)
+    // Render immediately (fast)
     renderResume(normalized);
 
     // After index is built, re-render so preview maps can populate thumbnails

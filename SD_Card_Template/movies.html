@@ -13,12 +13,11 @@
     --text:#333;
     --radius:10px;
     --shadow:0 6px 18px rgba(0,0,0,0.08);
-    --card-gap:1rem; /* used in JS for calculations */
-    --header-height:68px; /* fallback used by CSS; JS will set exact top */
+    --card-gap:1rem; 
+    --header-height:68px; 
   }
   *,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
   body{font-family:Arial,Helvetica,sans-serif;background:var(--bg);color:var(--text);display:flex;flex-direction:column;min-height:100vh}
-  /* Optional dark class hook - you can extend these rules later if desired */
   body.dark{ background:#101217; color:#e6eef8; }
   body.dark header{ background:#07142a; }
   body.dark .toolbar{ background: #0d1722; border-bottom-color: rgba(255,255,255,0.04); }
@@ -178,10 +177,6 @@
     to   { opacity:1; transform:translateX(0) scale(1); }
   }
 
-  /* ── DARK-THEME: MODAL + PLAYER SPECIFIC RULES ──
-     Only change the popup/menu and video player appearance when dark mode is active.
-     Keep the rest of the UI unchanged so behavior is preserved.
-  */
   body.dark .modal { background: rgba(2,6,10,0.78); }
   body.dark .modal-content {
     background: #0b1116;
@@ -217,8 +212,6 @@
   }
   body.dark .video-modal-content .close-btn { background: var(--primary-dark); color: #fff; border: none; }
 
-  /* ensure toolbar inputs keep readable behavior but don't interfere with modal colors */
-  /* Note: the JS intentionally forces the search box to white for readability; leaving that behavior intact. */
 </style>
 </head>
 <body>
@@ -279,13 +272,13 @@ const VIDEO_EXTS = ['.mp4','.mkv','.avi','.mov','.webm','.m4v'];
 const IMAGE_EXTS = ['.jpg','.jpeg','.png','.webp','.avif'];
 const SUB_EXTS = ['.srt','.vtt','.ass','.ssa','.sub'];
 
-/* NEW: THEME KEY + THEME BOOT & SYNC */
+/* THEME KEY + THEME BOOT & SYNC */
 const THEME_KEY = 'nomad_dark_mode';
 function applyThemeFlag(dark){
   if(dark) document.body.classList.add('dark');
   else document.body.classList.remove('dark');
 
-  // Keep search readable: enforce white bg + black text (menu wants this behavior)
+  // search readable: enforce white bg + black text
   const search = document.querySelector('.search-input');
   if(search){
     try {
@@ -309,7 +302,7 @@ window.addEventListener('storage', (ev) => {
     applyThemeFlag(dark);
   }
 });
-// optional helper for local toggles
+
 function toggleThemeLocal(){
   const isDark = document.body.classList.toggle('dark');
   try { localStorage.setItem(THEME_KEY, isDark ? 'true' : 'false'); }catch(e){}
@@ -323,10 +316,10 @@ let currentMovie = null;
 let autosaveTimer = null;
 let rootSig = null;
 
-/* ---------- Screen wake lock / NoSleep fallback ---------- */
-/* Place this right after your "State" declarations */
+    /* ---------- Screen wake lock / NoSleep fallback ---------- */
+    /* Keeps the screen on during playback (some browsers dont do this by default) */
 let wakeLock = null;
-let noSleep = null; // used if NoSleep.js is loaded
+let noSleep = null; // Not used
 
 async function requestWakeLock(){
   try {
@@ -340,7 +333,7 @@ async function requestWakeLock(){
       return true;
     }
 
-    // Fallback: NoSleep.js (if included via script tag)
+    // Fallback: NoSleep.js (Not Used)
     if(window.NoSleep){
       if(!noSleep) noSleep = new NoSleep();
       try { noSleep.enable(); } catch(e){ console.warn('NoSleep.enable() failed', e); }
@@ -387,7 +380,7 @@ function writeResume(v){ localStorage.setItem(RESUME_KEY, JSON.stringify(v)); }
 function fileKey(path, sz=0, mt=0){ return `${normalizePath(path)}|${sz||0}|${mt||0}`; }
 function formatTime(sec){ if(!sec||!isFinite(sec)) return '0:00'; sec=Math.floor(sec); const h=Math.floor(sec/3600), m=Math.floor((sec%3600)/60), s=sec%60; if(h) return `${h}:${String(m).padStart(2,'0')}:${String(s).padStart(2,'0')}`; return `${m}:${String(s).padStart(2,'0')}`; }
 
-/* NEW: getHashParam() — parse location.hash into {action, path} safely */
+/* getHashParam() — parse location.hash into {action, path} safely */
 function getHashParam(){
   const h = (location.hash || '').replace(/^#/,'');
 
@@ -481,7 +474,7 @@ async function fetchIndex(path){
 }
 
 
-/* Build movies from NDJSON indexes (kept original behavior) */
+/* Build movies from NDJSON indexes */
 async function buildFromIndexes(root){
   // Attempt to set rootSig using the root index header
   const rootResp = await fetchIndex(root);
@@ -567,7 +560,7 @@ async function loadFromMediaJson(){
   return out;
 }
 
-/* Render grid with optional staggered animation on first load */
+/* Render grid  */
 const gridEl = document.getElementById('grid');
 
 function renderGrid(){
@@ -577,7 +570,7 @@ function renderGrid(){
   for(const item of filtered){
     const card = document.createElement('div');
     card.className = 'media-card';
-    // helpful hook to update badge for a specific movie without re-rendering whole grid:
+    // update badge for a specific movie without re-rendering whole grid
     card.dataset.path = item.path || '';
 
     const saved = findResume(item);
@@ -726,17 +719,11 @@ function openMovieFromHash(hashObj){
            || movies.find(m => normalizePath('/' + (m.rawName||'')).endsWith(want.split('/').pop()))
            || movies.find(m => normalizePath(m.path).endsWith(want.split('/').pop()));
 
-  // If not found, try a quick reload of library once (in case hash arrived before library loaded fully)
   if(!found){
     try {
-      // loadLibrary is defined elsewhere; we try to refresh the list then search again
-      // (useful when hash handling runs early)
-      // NOTE: this is non-blocking if loadLibrary already ran
-      // but we await to give the library a chance to populate
-      // only do this when movies[] is empty to avoid unnecessary reloads
+      
       if(!movies || movies.length === 0){
-        // eslint-disable-next-line no-undef
-        // await loadLibrary(); // if you prefer to await here, uncomment and ensure this function is marked async
+c
       }
       found = movies.find(m => normalizePath(m.path) === want) ||
               movies.find(m => normalizePath('/' + (m.rawName||'')) === want) ||
@@ -804,7 +791,6 @@ function startStallWatcher(player, src){
         headers: { 'Range': 'bytes=0-1023' },
         cache: 'no-store'
       });
-      // 206 is ideal; 200 can also mean server returned whole file (not ideal for streaming)
       return (resp && (resp.status === 206 || resp.status === 200));
     } catch(e){
       return false;
@@ -915,7 +901,7 @@ function saveNow(){
       const key = fileKey(currentMovie.path, currentMovie.sz || 0, currentMovie.mt || 0);
       store[key] = { position: cur, duration: dur, updated: Date.now() };
       writeResume(store);
-      // only update the badge for the current movie to avoid re-rendering the whole grid (stops flashing)
+      // only update the badge for the current movie to avoid re-rendering the whole grid (stops flashing bug)
       try { updateResumeBadge(currentMovie, cur); } catch(e){ /* noop */ }
     }
   } catch(e){ console.warn('saveNow failed', e); }
@@ -1008,7 +994,7 @@ searchInput.addEventListener('input', (e)=> { clearTimeout(window.__debounce); w
 sortSelect.addEventListener('change', ()=> applySort(sortSelect.value));
 videoPlayer.addEventListener('ended', closeVideo);
 
-/* NEW: listen for hash changes and route them */
+/* listen for hash changes and route them */
 window.addEventListener('hashchange', ()=> handleHashNavigation(getHashParam()));
 
 /* Init sequence */
@@ -1016,7 +1002,7 @@ window.addEventListener('hashchange', ()=> handleHashNavigation(getHashParam()))
   try {
     await loadLibrary();
 
-    // NEW: ensure toolbar sits below the header on all screen sizes
+    // ensure toolbar sits below the header on all screen sizes
     function updateToolbarTop(){
       try {
         const headerEl = document.querySelector('header');
@@ -1024,7 +1010,7 @@ window.addEventListener('hashchange', ()=> handleHashNavigation(getHashParam()))
         if(!headerEl || !toolbarEl) return;
         const h = Math.ceil(headerEl.getBoundingClientRect().height);
         toolbarEl.style.top = h + 'px';
-        // Also update CSS var (keeps the stylesheet fallback in sync)
+        // CSS var (keeps the stylesheet fallback in sync)
         document.documentElement.style.setProperty('--header-height', h + 'px');
       } catch(e){ /* ignore measurement errors */ }
     }
@@ -1032,7 +1018,7 @@ window.addEventListener('hashchange', ()=> handleHashNavigation(getHashParam()))
     window.addEventListener('load', updateToolbarTop);
     updateToolbarTop(); // initial set
 
-    // NEW: handle any hash present once movies[] is available
+    // handle any hash present once movies[] is available
     try { handleHashNavigation(getHashParam()); } catch(e){ console.warn('hash handling failed', e); }
 
   } catch(e){

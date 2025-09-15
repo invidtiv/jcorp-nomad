@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width,initial-scale=1" />
 <title>Nomad • Music</title>
 
-<!-- Quick theme bootstrap: read dataset.theme and nomad_dark_mode, then fallback to prefers-color-scheme -->
+<!-- theme bootstrap: read dataset.theme and nomad_dark_mode, then fallback to prefers-color-scheme -->
 <script>
   (function(){
     try {
@@ -110,7 +110,7 @@
   .row.playing .title{color:var(--playing-text)}
   .row.playing .context{color:var(--playing-text)}
 
-  /* collections (kept in code for library scanning but we route to playlist page) */
+  /* collections  */
   .collection{border-radius:10px;overflow:visible;border:1px solid rgba(0,0,0,0.04);background:var(--card)}
   .collection-header{
     display:flex;align-items:center;gap:10px;padding:12px;border-radius:10px;background:linear-gradient(180deg, rgba(247,251,255,0.03), rgba(247,251,255,0.01));border-bottom:1px solid rgba(0,123,255,0.06);
@@ -134,9 +134,7 @@
   .progress{height:8px;background:rgba(0,0,0,0.04);border-radius:999px;overflow:hidden;width:72%;cursor:pointer}
   .progress > .bar{height:100%;background:var(--primary);width:0%;transition:width .06s linear}
 
-  /* Player control structure (grid): left / center / right
-     Grid gives tight predictable spacing so center group stays compact,
-     while loop/download are kept visually small at edges. */
+  /* Player control structure (grid) */
   .controls{
     display:grid;
     grid-template-columns: auto 1fr auto;
@@ -190,7 +188,7 @@
 
   .control:active{ transform: translateY(1px); }
 
-  /* ensure loop/download ordering visually consistent if needed */
+  /* ensure loop/download ordering*/
   .loop { order:1; }
   .prev { order:2; }
   .play { order:3; }
@@ -217,7 +215,7 @@
       --center-gap:6px;
     }
 
-    /* switch grid to fixed columns so center stays compact on narrow screens */
+    /* fixed columns so center stays compact on narrow screens */
     .controls{
       grid-template-columns: auto auto auto;
       justify-items:center;
@@ -266,8 +264,7 @@
       <div id="allList" class="all-list" aria-live="polite"></div>
     </section>
 
-    <!-- Collections/Playlists are intentionally not shown on this page.
-         A dedicated playlist.html should host the playlist UI + its own player. -->
+    <!-- Collections/Playlists Page -->
     <section id="collectionsSection" class="section" style="display:none">
       <h2>Collections (top-level folders)</h2>
       <div id="collectionsWrap" class="collections-wrap" aria-live="polite"></div>
@@ -484,7 +481,7 @@ async function scanLibrary(){
   console.debug('[Music] scan complete. tracks:', allTracks.length, 'collections:', collections.size);
 }
 
-/* Add track and compute required display properties */
+/* track and compute required display properties */
 function addTrackToMaps(fullPath){
   const normalized = normalizePath(fullPath);
   const parts = normalized.split('/').filter(Boolean);
@@ -511,7 +508,7 @@ function addTrackToMaps(fullPath){
   if(dir) dir.files.push(t);
 }
 
-/* quick deterministic id for track (simple hash fallback) */
+/* quick deterministic id for track  */
 function sha1(str){
   let h = 5381;
   for(let i=0;i<str.length;i++){ h = ((h << 5) + h) + str.charCodeAt(i); h = h & 0xffffffff; }
@@ -539,7 +536,7 @@ function _setPlayButtonLoading(loading){
   }
 }
 
-/* Keep UI minimal updates: highlight current playing row(s) */
+/*  highlight current playing row(s) */
 function updatePlayingRow(playingPath){
   try {
     const prevAll = allListEl.querySelectorAll('.row.playing');
@@ -586,7 +583,6 @@ function playAtPlaylistIndex(i){
     const p = audio.play();
     if(p && typeof p.then === 'function'){
       p.then(()=> { _setPlayButtonLoading(false); renderCurrentViews(); }).catch(err => {
-        // may be autoplay policy, rely on user interaction later
         console.debug('play attempt failed (may be autoplay policy):', err);
         renderCurrentViews();
       });
@@ -599,7 +595,6 @@ function playAtPlaylistIndex(i){
   }
 }
 
-/* setPlaylistFromTracks - replace currentPlaylist and optionally start at index */
 function setPlaylistFromTracks(tracks, startIndex = 0){
   currentPlaylist = tracks.slice();
   currentSource = { type:'all', path:null }; // this page shows the system-wide playable list
@@ -992,7 +987,7 @@ downloadBtn.addEventListener('click', ()=> {
 /* shuffle */
 shuffleBtn.addEventListener('click', ()=> { shuffleCurrent(); });
 
-/* sort toggle - try to preserve current track position if practical */
+/* sort toggle */
 sortBtn.addEventListener('click', ()=> {
   sortAsc = !sortAsc;
   sortBtn.textContent = sortAsc ? 'A → Z' : 'Z → A';

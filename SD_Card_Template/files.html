@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<!-- Nomad Files Page (with menu dark-mode sync) -->
+<!-- Nomad Files Page -->
 <html lang="en">
 <head>
   <meta charset="UTF-8" />
@@ -94,7 +94,7 @@
       font-size: 0.9rem;
       min-width: 0;
     }
-    /* keep search visible / readable even in dark mode (JS also forces this) */
+    /* keep search visible  */
     body.dark .toolbar input[type="search"] { background: #fff; color: #000; }
 
     .toolbar select {
@@ -219,7 +219,7 @@
     const THEME_KEY = 'nomad_dark_mode';
     function applyThemeFlag(dark){
       document.body.classList.toggle('dark', !!dark);
-      // Keep search readable: force white background + black text for search inputs
+      // Keep search readable: forces white background + black text for search inputs
       const search = document.querySelector('.toolbar input[type="search"]');
       if (search) { search.style.background = '#fff'; search.style.color = '#000'; }
     }
@@ -231,7 +231,7 @@
         applyThemeFlag(isDark);
       } catch (e) { applyThemeFlag(false); }
     })();
-    // listen for theme changes in other tabs/pages (keeps pages in sync)
+    // listen for theme changes in menu (keeps pages in sync)
     window.addEventListener('storage', (ev) => {
       if (ev.key === THEME_KEY) {
         const dark = ev.newValue === 'true';

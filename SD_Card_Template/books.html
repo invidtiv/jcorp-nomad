@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<!-- Nomad Books Page — NDJSON index + direct /Books serving (fixed) -->
+<!-- Nomad Books Page -->
 <html lang="en">
 <head>
   <meta charset="utf-8" />
@@ -113,7 +113,7 @@
   </header>
 
   <div class="toolbar">
-    <!-- added class "search-input" so dark-mode helper can force white background + black text -->
+    <!-- Added class "search-input" so dark-mode helper can force white background + black text -->
     <input id="searchInput" class="search-input" type="search" placeholder="Search books…" aria-label="Search books">
     <select id="sortSelect" aria-label="Sort books">
       <option value="nameAsc">A → Z</option>
@@ -161,19 +161,19 @@
   <footer>© <span id="year"></span> Jcorp Nomad</footer>
 
 <script>
-/* CONFIG */
+/* Type support (images are there for funsies, use jpg) */
 const ROOT = '/Books';
 const INDEX_ENDPOINT = '/api/index';
 const BOOK_EXTS = ['.pdf','.epub','.mobi','.azw3','.cbz','.cbr','.cbt','.cb7','.djvu','.txt'];
 const IMAGE_EXTS = ['.jpg','.jpeg','.png','.webp','.avif'];
 
-/* THEME + HASH CONFIG (NEW) */
+/* THEME + HASH CONFIG */
 const THEME_KEY = 'nomad_dark_mode'; // shared key with menu
 function applyThemeFlag(dark){
   if(dark) document.body.classList.add('dark');
   else document.body.classList.remove('dark');
 
-  // Keep search readable: force white background + black text for search inputs if desired
+  // search: force white background + black text for search inputs if desired
   const s = document.querySelector('.search-input');
   if(s){ try { s.style.background = '#fff'; s.style.color = '#000'; } catch(e){} }
 }
@@ -186,7 +186,7 @@ function applyThemeFlag(dark){
   }
 })();
 window.addEventListener('storage', (ev) => { if(ev.key === THEME_KEY) applyThemeFlag(ev.newValue === 'true'); });
-// optional toggler (not used by this page UI, but handy if you later add a toggle)
+//not used
 function toggleTheme(){
   const isDark = document.body.classList.toggle('dark');
   try { localStorage.setItem(THEME_KEY, isDark ? 'true' : 'false'); } catch(e){}
@@ -226,7 +226,7 @@ function isImageName(n){ return IMAGE_EXTS.includes(ext(n)); }
 function escapeHtml(s){ if(!s) return ''; return String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
 function prettify(filename){ if(!filename) return ''; let n = filename.replace(/\.[^/.]+$/,''); let t = n.replace(/[_\.]+/g,' ').trim(); t = t.replace(/\s*\(?\d{4}\)?\s*$/,'').trim(); return t || filename; }
 
-/* Return direct URL to file path (use encodeURI to preserve slashes) */
+/* Return direct URL to file path */
 function fileUrlDirect(path){ if(!path) return ''; return encodeURI(path); }
 
 /* create a downloadable click anchor */
@@ -239,7 +239,7 @@ function downloadFile(path, filename){
   a.remove();
 }
 
-/* Robust NDJSON fetch & parse */
+/* NDJSON fetch & parse */
 async function fetchIndex(path){
   const url = `${INDEX_ENDPOINT}?path=${encodeURIComponent(normalizePath(path))}`;
   const res = await fetch(url);
@@ -397,7 +397,7 @@ function renderGrid(){
   gridEl.appendChild(frag);
 
   if(shouldAnimate){
-    try{ localStorage.setItem(ANIM_KEY, '1'); }catch(e){ /* ignore storage failures */ }
+    try{ localStorage.setItem(ANIM_KEY, '1'); }catch(e){  }
   }
 }
 
@@ -561,17 +561,7 @@ document.addEventListener('keydown', (ev) => {
   }
 });
 
-/* -----------------------
-   HASH PARSING & HANDLING
-   -----------------------
-   Supports:
-     #open=<encodedPath>   -> open a folder or file (opens list modal or action modal)
-     #download=<encodedPath> -> trigger download of file immediately
-   Example:
-     /books#open=%2FBooks%2FMySeries
-     /books#open=%2FBooks%2FMySeries%2FThe%20Book.pdf
-     /books#download=%2FBooks%2FMySeries%2FThe%20Book.pdf
-*/
+/* --------Hash Handler-------*/
 function getHashParam(){
   const h = (location.hash || '').replace(/^#/,'');
   if(!h) return { action:null, path:null };
@@ -622,10 +612,9 @@ async function openBookFromHash(hashObj){
     }
   }
 
-  // 2) file might live inside a directory: search each dir (loads dir indexes as necessary)
+  // 2) file might live inside a directory
   for(const item of library){
     if(item.type !== 'dir') continue;
-    // if want path doesn't start with this dir, skip quick (but still ok to check if want basename matches)
     const dirPrefix = normalizePath(item.dir) + '/';
     // load dir contents to search
     try {

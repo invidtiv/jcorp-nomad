@@ -9,7 +9,7 @@
         document.getElementById('sd-percent').textContent = `${percent}%`;
       } catch {}
     }
-/* ---------------- THEME: respect menu-controlled dark mode (safe, DOM-ready) ---------------- */
+/* ---------------- THEME ---------------- */
 const THEME_KEY = 'nomad_dark_mode';
 
 function applyThemeFlag(dark){
@@ -28,7 +28,6 @@ function applyThemeFlag(dark){
       root.setProperty('--card-bg', '#071018');
       root.setProperty('--card-border', 'rgba(255,255,255,0.03)');
       root.setProperty('--header-text', '#e6eef8');
-      // keep logo/primary as-is unless you want to change it
       // root.setProperty('--primary', '#4da3ff');
     } else {
       root.setProperty('--bg', '#f4f4f9');
@@ -50,7 +49,7 @@ function applyThemeFlag(dark){
   }
 }
 
-// Apply only after DOM is ready — prevents timing race that made the page appear dark prematurely
+// Apply only after DOM is ready 
 function initTheme() {
   try {
     const saved = localStorage.getItem(THEME_KEY);
@@ -77,7 +76,6 @@ window.addEventListener('storage', (ev) => {
 // SHA-256 helper: returns hex string of input
 async function sha256Hex(str) {
   if (!window.crypto || !crypto.subtle) {
-    // very old env fallback (not expected in modern browsers)
     console.warn('SubtleCrypto unavailable; sha256Hex will return raw string (less secure).');
     return str;
   }
@@ -115,7 +113,6 @@ async function loadSettings() {
           localStorage.removeItem('nomad_admin_pw_hash');
           console.log('🔑 Admin password changed or not cached — forcing re-login.');
         }
-        // (note: don’t save hash here; only after a successful login)
       } else {
         console.log("ℹ️ No adminPassword in settings — treating as password disabled.");
         localStorage.removeItem('nomad_admin_logged_in');
@@ -152,7 +149,7 @@ async function loadSettings() {
       updateBrightnessLabel(sliderVal);
     }
 
-    // ── Auto-Generate Media Toggle ───
+    // ── Auto-Generate Index Toggle ───
     isAutoGenerate = !!s.autoGenerateMedia;
     updateToggle();
     const autoGenEl = document.getElementById('auto-generate');
@@ -166,8 +163,6 @@ async function loadSettings() {
   }
 }
 
-
-    // Gather all settings from UI and POST to /settings
 // Gather all settings from UI and POST to /settings
 async function saveSettings() {
   // read slider 1–100
@@ -184,13 +179,10 @@ async function saveSettings() {
     autoGenerateMedia:  isAutoGenerate
   };
 
-  // include Wi-Fi password only if the user just updated it
   if (window._pendingWifiPassword) {
     payload.wifiPassword = window._pendingWifiPassword;
   }
 
-  // include adminPassword only if set via updateAdminPassword()
-  // Note: we intentionally leave window._pendingAdminPassword in place until POST completes.
   if (window._pendingAdminPassword !== undefined) {
     payload.adminPassword = window._pendingAdminPassword;
   }
@@ -303,7 +295,7 @@ async function updateAdminPassword() {
       // stash the password…
       window._pendingWifiPassword = newPass;
 
-      // immediately apply if WiFi API is present (for dev/testing)
+      // immediately apply if WiFi API is present
       if (typeof WiFi !== 'undefined' && WiFi.softAP) {
         WiFi.softAP(newSSID, newPass);
       }
@@ -339,7 +331,6 @@ async function updateAdminPassword() {
         // Trigger the POST request; device will reboot, so no reliable response expected
         await fetch('/generate-media', { method: 'POST' });
 
-        // Optionally clear or update message here, but device reboot means page will reload later
         msg.textContent = 'indexing started.';
       } catch {
         msg.textContent = 'Reconnect.';
@@ -446,7 +437,7 @@ document.addEventListener('DOMContentLoaded', async () => {
   // require admin auth if needed (shows overlay if password set)
   await requireAdminAuth(settings);
 
-  // --- existing initialization code (unchanged) ---
+  // ---  initialization code ---
   // Attach RGB button clicks
   document.getElementById('mode-off').onclick    = () => setRGBMode('off');
   document.getElementById('mode-solid').onclick  = () => setRGBMode('solid');
@@ -510,7 +501,7 @@ document.getElementById('cpu-temp').addEventListener('click', () => {
 });
 
 async function requireAdminAuth(passedSettings) {
-  // helper: pick last element if duplicate IDs exist (avoids ambiguous node returns)
+  // helper: pick last element if duplicate IDs exist
   function pickLast(selector) {
     const els = document.querySelectorAll(selector);
     return els.length ? els[els.length - 1] : null;
@@ -522,13 +513,13 @@ async function requireAdminAuth(passedSettings) {
   const pwErrorEl = pickLast('#admin-pw-error')   || pickLast('#pw-error');
   const pwSubmitEl= pickLast('#admin-pw-submit')  || pickLast('#pw-submit');
 
-  // if any required DOM piece missing, log and skip (avoid uncaught exceptions)
+  // if any required DOM piece missing, log and skip 
   if (!pwOverlay || !pwInputEl || !pwSubmitEl) {
     console.warn('requireAdminAuth: overlay or controls not present in DOM. Skipping auth overlay.');
     return;
   }
 
-  // detach old listeners by cloning nodes (prevents legacy handlers)
+  // detach old listeners by cloning nodes
   function replaceNodeIfNeeded(el) {
     if (!el || !el.parentNode) return el;
     // clone to remove attached event listeners (if any)
@@ -556,7 +547,7 @@ async function requireAdminAuth(passedSettings) {
     if (r && r.ok) settings = await r.json();
   } catch (e) { /* ignore, use passedSettings if available */ }
 
-  // DEBUG logs (useful while testing)
+  // DEBUG 
   console.debug('requireAdminAuth: settings present?', !!settings);
   if (settings) console.debug('requireAdminAuth: has adminPassword field?', Object.prototype.hasOwnProperty.call(settings, 'adminPassword'));
   console.debug('requireAdminAuth: localStorage.nomad_admin_logged_in =', localStorage.getItem('nomad_admin_logged_in'));
@@ -565,7 +556,7 @@ async function requireAdminAuth(passedSettings) {
   const hasSettings = !!settings;
   const hasAdminField = hasSettings && Object.prototype.hasOwnProperty.call(settings, 'adminPassword');
 
-  // explicit disabled password => skip overlay
+  // explicit disabled password > skip overlay
   if (hasAdminField && (typeof settings.adminPassword === 'string') && settings.adminPassword.trim() === '') {
     localStorage.removeItem('nomad_admin_logged_in');
     localStorage.removeItem('nomad_admin_pw_hash');
@@ -577,7 +568,7 @@ async function requireAdminAuth(passedSettings) {
 
   // already logged in in this browser?
   const alreadyLogged = localStorage.getItem('nomad_admin_logged_in') === 'true';
-  // session force flag overrides cached login (useful for testing after password change)
+  // session force flag overrides cached login 
   const forceReauth = sessionStorage.getItem('nomad_force_reauth') === '1';
 
   if (alreadyLogged && !forceReauth) {
@@ -746,7 +737,6 @@ async function updateTemp() {
     const iframe = document.getElementById('filebrowser-iframe');
 
     function resizeFrame() {
-      // Example heuristic: make it 70% of viewport height for desktop, 55% for small screens
       const h = window.innerWidth < 768 ? Math.round(window.innerHeight * 0.55) : Math.round(window.innerHeight * 0.70);
       wrap.style.height = h + 'px';
       iframe.style.height = '100%';
@@ -754,14 +744,11 @@ async function updateTemp() {
     window.addEventListener('resize', resizeFrame);
     window.addEventListener('load', resizeFrame);
     resizeFrame();
-
-    // Optional postMessage listener — the embedded filebrowser can send: { action: 'reload-admin' }
     window.addEventListener('message', (ev) => {
-      // Only accept messages from same origin (security)
+      // Only accept messages from same origin 
       if (ev.origin !== window.location.origin) return;
       const data = ev.data || {};
       if (data.action === 'reload-admin') {
-        // Reload the admin bar and SD info (adjust to your real functions)
         if (typeof fetchAdminBar === 'function') fetchAdminBar();
         if (typeof fetchSD === 'function') fetchSD();
       }

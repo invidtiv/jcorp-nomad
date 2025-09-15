@@ -5,6 +5,7 @@
   <meta name="viewport" content="width=device-width,initial-scale=1"/>
   <title>Nomad — File Manager</title>
   <script>
+      // The UI Here is a mess, I will clean it up at some point to make it a bit more clean. 
   // apply saved theme *before* CSS paints to avoid flash
   try {
     const saved = localStorage.getItem('nomad_dark_mode');
@@ -91,7 +92,7 @@ html,body{height:100%;margin:0;font-family:Inter, system-ui, -apple-system, "Seg
 .shortcut{
   padding:10px;
   border-radius:10px;
-  background: var(--panel-bg);           /* <- clean single-color background */
+  background: var(--panel-bg);           
   border:1px solid rgba(11,102,255,0.04);
   cursor:pointer;
   color:var(--accent-2);
@@ -164,7 +165,7 @@ li.bucket{display:flex;flex-direction:column;border-radius:10px;padding:8px;bord
   .browser{max-height:none;border-radius:8px}
   li.bucket{border:none;padding:4px 0}
   .wrap{align-items:stretch}
-  /* make header controls horizontally scrollable but tidy */
+  /* Header controls horizontally scrollable but tidy */
   .header{align-items:stretch}
   .controls{overflow-x:auto;padding-bottom:6px;-webkit-overflow-scrolling:touch}
   .controls .btn{flex:0 0 auto}
@@ -261,7 +262,7 @@ li.bucket{display:flex;flex-direction:column;border-radius:10px;padding:8px;bord
     </div>
   </div>
 
-  <!-- jQuery must be valid JS at this path -->
+  <!-- jQuery must be valid JS at this path, ensure its placed in assets (check github) -->
   <script src="assets/jquery.min.js"></script>
 
   <script>
@@ -351,7 +352,7 @@ li.bucket{display:flex;flex-direction:column;border-radius:10px;padding:8px;bord
       }
     }
 
-    /* Index parsing (robust handling of ndjson or JSON arrays or HTML connector) */
+    /* Index parsing */
     function parseIndexText(text){
       try {
         const j = JSON.parse(text);
@@ -402,7 +403,7 @@ li.bucket{display:flex;flex-direction:column;border-radius:10px;padding:8px;bord
           return parsed;
         }
         if (res.status === 202) {
-          // server accepted inline build — poll for nested index (or final result)
+          // server accepted inline build — poll for nested index 
           setBusy('Indexing ' + path + '…');
           for (let i=0;i<INLINE_INDEX_POLL_ATTEMPTS;i++){
             await sleep(INLINE_INDEX_POLL_MS);
@@ -430,13 +431,12 @@ li.bucket{display:flex;flex-direction:column;border-radius:10px;padding:8px;bord
             } catch(e){}
           }
           clearBusy('Index queued');
-          // fall through to other strategies (connector)
         }
       } catch(e){
         // ignore and try next
       }
 
-      // 2) try the nestedIndexEndpoint (some firmwares provide it)
+      // 2) try the nestedIndexEndpoint
       try {
         const res = await fetch(nestedIndexEndpoint + '?path=' + encodeURIComponent(path), { cache: 'no-store' });
         if (res.ok) {
@@ -485,7 +485,7 @@ li.bucket{display:flex;flex-direction:column;border-radius:10px;padding:8px;bord
       return empty;
     }
 
-    /* fetchIndex: attempt direct, and if empty, walk parents (preserve original fallback behavior) */
+    /* fetchIndex: attempt direct, and if empty, walk parents */
     async function fetchIndex(path){
       path = norm(path);
       const direct = await fetchIndexDirect(path);
@@ -613,7 +613,7 @@ li.bucket{display:flex;flex-direction:column;border-radius:10px;padding:8px;bord
       }
     }
 
-    /* Inline toggle and child view — fixed breadcrumb slicing */
+    /* Inline toggle and child view */
     async function toggleInline(dirPath, $rowElem, $childWrap, $caretElem){
       dirPath = norm(dirPath);
       const $row = ($rowElem instanceof Element) ? $rowElem : document.querySelector($rowElem);

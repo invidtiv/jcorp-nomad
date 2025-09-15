@@ -10,7 +10,7 @@
   --primary-dark: #0056b3;
   --danger: #cc3333;
 
-  /* tokens (JS may toggle by adding body.dark or by setting vars) */
+  /* tokens*/
   --bg: #f4f4f9;
   --text: #333;
   --muted: #6b7280;
@@ -25,7 +25,7 @@
   --header-height: 68px;
 }
 
-/* Dark-mode tokens (JS can toggle body.dark) */
+/* Dark-mode tokens */
 body.dark{
   --bg: #0b1116;
   --text: #e6eef8;
@@ -90,7 +90,7 @@ header h1 {
   flex: 0 0 auto;
 }
 
-/* Admin bar (controls + info) */
+/* Admin bar */
 .admin-bar{
   background: var(--card-bg);
   border-bottom: 2px solid var(--primary);
@@ -127,7 +127,7 @@ header h1 {
   cursor: pointer;
 }
 
-/* Primary restart button style */
+/* Restart button style */
 #btn-restart{
   background: var(--primary);
   color: #fff;
@@ -135,7 +135,7 @@ header h1 {
 }
 #btn-restart:hover{ filter:brightness(.98); transform: translateY(-1px); }
 
-/* USB and Flash keep color */
+/* USB and Flash */
 #btn-usbmode{
   background: var(--primary);
   color: #fff;
@@ -241,7 +241,7 @@ button.danger, .btn-danger { background: var(--danger); color:#fff; }
 /* Headings */
 h2 { font-size:1.25rem; margin-top:0; color:var(--primary); }
 
-/* LED color selector - circular and fills swatch */
+/* LED color selector */
 #led-color {
   width: 130px;
   height: 130px;
@@ -252,17 +252,12 @@ h2 { font-size:1.25rem; margin-top:0; color:var(--primary); }
   appearance: none;
   background-clip: padding-box;
   box-shadow: 0 2px 6px rgba(0,0,0,0.05);
-  margin-top: 0.75rem; /* a little lower than buttons */
+  margin-top: 0.75rem;
 }
 
-/* Webkit swatch adjustments to fill the circular area */
 #led-color::-webkit-color-swatch-wrapper { padding: 0; border-radius: 50%; }
 #led-color::-webkit-color-swatch { border: none; border-radius: 50%; }
-
-/* Firefox-specific - make color fill rounded input */
 #led-color::-moz-color-swatch { border: none; border-radius: 50%; }
-
-/* SD / brightness big numbers */
 #sd-percent, #brightness-percent { font-size: 4rem; font-weight: bold; text-align:center; }
 
 /* Progress appearance and prevent overflow */
@@ -374,7 +369,7 @@ progress::-moz-progress-bar { background: linear-gradient(90deg,var(--primary),v
 #pw-overlay {
   position: fixed;
   inset: 0;
-  display: none; /* shown by code via inline style/class */
+  display: none;
   align-items: center;
   justify-content: center;
   z-index: 9999;
@@ -554,7 +549,7 @@ progress::-moz-progress-bar { background: linear-gradient(90deg,var(--primary),v
 <div class="card file-manager" id="file-browser-tab">
   <h2>File Browser</h2>
 
-  <!-- iframe wrapper keeps spacing consistent with your layout -->
+  <!-- iframe wrapper keeps spacing consistent -->
   <div id="filebrowser-frame-wrap" style="height: calc(70vh); max-height: 900px; padding: 0.5rem;">
     <iframe id="filebrowser-iframe"
             src="/filebrowser"
