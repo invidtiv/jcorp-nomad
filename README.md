@@ -17,108 +17,90 @@ Stream movies, music, books, and shows anywhere — no internet required.</p>
 
 ---
 
-##  Polish Update Disclaimer
+## Experimental Branch — Mk2 Early Release!
+---
 
-This is a major update focused on **polish, stability, and usability improvements**.  
-It includes:
+**Sorry for the delay.** This update took longer than expected while I worked through reliability issues with the new indexing system, it’s a lot of moving parts. There are still improvements planned, but the core features are usable and ready for testing. I plan to have yall mess around with this version and make individual feature updates based on your ideas. This is the version I plan to call "complete" so I will not be making any major overhaul updates for awhile, going to focus on smaller frontend stuff. 
 
-- Full cleanup of reported bugs  
-- Improved user interface  
-- Rebuilt admin panel  
-- New features across every section  
-- All configuration options now available in the **frontend** — no need to modify firmware to change settings  
-- Greatly enhanced file and media support  
+### Highlights
+
+- **New indexing system**
+  - Much more reliable for very large libraries and heavy edits.
+  - **Non-blocking** indexing: runs in the background without requiring a reboot.
+  - Index edits can often be made without reindexing the entire card.
+  - Power-loss safety: if the device is unplugged during indexing, items indexed up to that point remain visible (you will need to reindex to finish, but the index won’t be catastrophically broken).
+  - **Recommended workflow:** for critical bulk changes I still recommend editing the SD card offline, but the Admin UI now supports robust in-place editing.
+
+- **Menu page overhaul**
+  - Global **search bar** on the menu to search & access media from one place.
+  - Search results show cover image, title, directory, and file type; clicking opens the file (action depends on file type).
+  - **Dark Mode** toggle added, a few visual bugs remain, but it generally works across pages.
+  - Plan to add ZIM content into the search bar, Its possible, just haven't been able to get it working. 
+
+- **Shows & Music Pages**
+  - **Shows:** supports season folders (e.g. `/ShowName/Season1/Ep1.mp4`) and also episodes placed at the show root so single-season shows and specials display correctly.
+  - **Music:** split `music.html` into `music.html` + `playlist.html` for increased reliability. Supports `/Artist/Album/Song.mp3` and music at any folder level. Both pages still have some bugs — please report edge cases. (music is hard for some reason lol)
+
+- **Flash Mode**
+  - New **Flash Mode** button in the Admin Panel lets you reflash/update the device without opening the case. In case you couldn't guess I broke another screen. 
+
+- **Admin panel password**
+  - Fixed the password overlay and locking behavior so you can lock the system (handy to prevent unintended changes by children or other users). This system is super basic and unsecure, its meant to be a mild deterent. 
+
+- **Frontend re-index checking**
+  - The frontend now checks the backend on startup to detect index changes (you may notice a startup lag).
+  - Working toward: load the old index first from cache, then update when the background scan completes, not finished yet.
+
+- **Resume function**
+  - Movies and Shows track watched progress (typically within ~1 second accuracy).
+  - Items present **Play from Start** and **Resume** options.
+  - Menu shows the **last three movies** and **last three shows** (on mobile, shows the most recent of each).
+
+- **Books (WIP)**
+  - Books page overhaul planned, goal is native **EPUB** and **audiobook** support. Not stable yet; may switch JS libraries to achieve this.
+  - I only need Epub.js and the existing range request handler + resume logic for the current scope. But getting foliate or similar to work is a better longterm system. 
+
+- **Case design**
+  - Added clip/guard divots to thicken up thin walls. Still experimenting with aesthetics, feedback welcome. (at present I am not too happy with the look)
+
+### Known issues / caveats
+
+- Indexing is improved but **not final**, very large libraries may still expose edge cases.
+- Menu Dark Mode has a few visual bugs. > (admin panel text editor for example)
+- Music / Playlist pages are more reliable but still a bit buggy in places.
+- Frontend startup is currently slower while it checks for index updates.
+- Books page and full EPUB/audiobook features are not completed. 
 
 ---
 
-## New Features in the Polish Update
-
-###  Music Page
-
-- Song downloads
-- Loop songs 
-- Sort songs A–Z
-- Shuffle songs and playlists
-- Playlist support via subfolders (flexible usage)
-- Playlists loop automatically
-- Expanded file type support: tested with `.mp3`, `.wav`, and `.flac` (others may work, untested)
-
-###  Books Page
-
-- EPUB support added (no web reader yet, but download works)
-- Fixed footer CSS display issue
-
-###  Admin Panel (Completely Rebuilt)
-
-- Restart the device directly from the panel
-- Switch to USB Mass Storage Mode with one click
-- SD card usage tracking with visual indicators
-- Control RGB LED color and mode
-- Change or disable the admin password (for admin page access) (default is "password")
-- Change Wi-Fi SSID and password
-- Set device brightness (off option coming soon)
-- Toggle `media.json` auto-generation on boot
-- Generate `media.json` manually
-- Display connected Wi-Fi info and number of connected users
-- Integrated file system browser with jQueryFileTree:
-  - Upload, delete, rename, download, create folder, and edit files (basic inline code editor)
-  - Improved UX over the original browser, but still allows dangerous deletions, use with care.
-
-###  Gallery Page (New)
-
-- Displays images with basic zoom functionality
-- Video playback support
-- Sortable display grid
-
-###  Files Page (New)
-
-- Lets you store and download any file type
-- Still limited to FAT32 file size limit (4 GB max)
-- Useful for sharing non-media files like firmware, PDFs, etc.
-
-###  Interface + UI Improvements
-
-- LCD now displays “USB Mass Storage Mode” clearly — no more frozen screen confusion
-- `media.json` generation displays file names in real-time on screen
-- More intuitive screen feedback during long operations
-
-###  File Type & Playback Support
-
-- Improved video file detection and browser compatibility
-- Works with almost all browser-supported video types
-- Unsupported files fall back to download behavior
-
-###  Admin Access Notes
-
-- A new "Settings" button on the top-right of the menu screen leads to the Admin Panel
-- Default admin password is `"password"`
-- If locked out, inspect (F12) the overlay and delete it manually to regain access
-- All settings now persist across reboots
+This branch is for users who want the newest features and can help test stability. If you find bugs or odd behavior, please open issues or PRs — your feedback is how this moves from `experimental` into `main`.
 
 ---
-
-## Experimental Branch Enhancements
-
-This branch includes all current features being tested for stability before merging into `main`.
 
 ### Key Features
 
-- Admin panel with controls for restart, USB mode, Wi-Fi, RGB, brightness, password, and media generation
-- Frontend-based configuration (no firmware edits required)
-- Full file system browser with upload, rename, delete, and inline editing
-- Music player with playlist support, shuffle, loop, downloads, and file sorting
-- Expanded audio format support (MP3, WAV, FLAC, and others)
-- Books section with PDF support (and limited Epub support)
-- Gallery page for browsing images and video playback
-- Files page for general-purpose file sharing and downloads
-- Media.json generation with live progress shown on screen
-- LCD interface with USB mode status and SD card usage display
-- Captive portal for easy user access
-- OPDS support for eBook integration
-- Basic DLNA support for media discovery on supported devices
-- Custom UI built with SquareLine Studio
-- Persistent settings stored across reboots
-- Improved mobile-friendly web UI
+- Admin panel with controls for restart, USB mode, Flash Mode, Wi-Fi, RGB, brightness, password/locking, and manual/automatic indexing 
+- Frontend-based configuration (no firmware edits required)  
+- Full file system browser with upload, rename, delete, download, and inline editing 
+- non-blocking background indexing, safe on power-loss, editable without full reindex for many changes, improved reliability for large libraries  
+- Global search on the Menu page with cover image, title, directory, and file type results
+- Dark Mode
+- Music player with playlist support, folder-based playlists, shuffle, loop, downloads, and sorting.
+- Shows page with season-folder support plus support for episodes at the show root (single-season shows & specials supported)  
+- Books section with PDF support and limited EPUB support (EPUB/audiobook native support planned; WIP)  
+- Gallery page for browsing images and video playback  
+- Files page for general-purpose file sharing and downloads (FAT32 limits apply)  
+- LCD interface with USB mode status and SD card usage display and real-time operation feedback  
+- Automatic Frontend re-caching when Index is updated. 
+- Resume/watch-progress tracking for Movies and Shows with Play from Start / Resume options and recent items shown on the Menu (last three movies / last three shows)  
+- Captive portal for easy user access  
+- OPDS support for eBook integration  
+- Basic DLNA support for media discovery on supported devices  
+- Custom UI built with SquareLine Studio  
+- Persistent settings stored across reboots  
+- Improved mobile-friendly web UI and performance optimizations for large libraries  
+- Reliability and UX improvements: better feedback during long ops, performance tweaks, and various bug fixes
+
 
 Use this branch if you want the most up to date features, improved stability, and a much more polished experience. While still under active development, this is now the recommended version for most users and I will be pushing it to main after a few days of user testing. 
 
