@@ -22,6 +22,8 @@ Stream movies, music, books, and shows anywhere — no internet required.</p>
 
 **Sorry for the delay.** This update took longer than expected while I worked through reliability issues with the new indexing system, it’s a lot of moving parts. There are still improvements planned, but the core features are usable and ready for testing. I plan to have yall mess around with this version and make individual feature updates based on your ideas. This is the version I plan to call "complete" so I will not be making any major overhaul updates for awhile, going to focus on smaller frontend stuff. 
 
+**As a note you MUST re-index from the admin panel as soon as you get this version set up, it wont index automaticly, I may add a check for media.json, but have not done so yet.**
+
 ### Highlights
 
 - **New indexing system**
