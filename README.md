@@ -65,6 +65,11 @@ Stream movies, music, books, and shows anywhere — no internet required.</p>
 - **Case design**
   - Added clip/guard divots to thicken up thin walls. Still experimenting with aesthetics, feedback welcome. (at present I am not too happy with the look)
 
+- **Bug Fixes**
+  - Fixed the crashing behavior on large index opening in admin panel.
+  - Sometimes the index rescan when opening a tab can cause a crash, I am working on fixing this, but the new recovery system is pretty snappy for most devices. (if you are streaming you likely wont even notice someone crashed it) 
+  - Fixed the SD bar not updating / file system size accuracy 
+
 ### Known issues / caveats
 
 - Indexing is improved but **not final**, very large libraries may still expose edge cases.
