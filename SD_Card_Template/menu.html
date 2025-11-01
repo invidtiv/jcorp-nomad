@@ -336,7 +336,6 @@
     <div class="resume-list" id="resumeList"></div>
   </div>
 </main>
-<script src="/assets/zim-bridge.js"></script>
 <script>
 /* ---------------- CONFIG ---------------- */
 const INDEX_DIR = '/.system-index';
@@ -603,13 +602,75 @@ function applyTheme(dark){
 try{ applyTheme(localStorage.getItem(THEME_KEY) === 'true'); }catch(e){ applyTheme(false); }
 themeBtn.addEventListener('click', ()=> applyTheme(!document.body.classList.contains('dark')));
 
-/* ---------------- UTIL ---------------- */
+    /* ---------------- UTIL ---------------- */
+    /* Request deduplication cache to prevent spam */
+    const __fetchCache = new Map();
+    const __fetchInFlight = new Map();
+
+    async function cachedFetch(url, timeoutMs = 3000) {
+        // Return cached result if available (5s TTL)
+        if (__fetchCache.has(url)) {
+            const cached = __fetchCache.get(url);
+            if (Date.now() - cached.ts < 5000) return cached.result;
+        }
+
+        // Wait for in-flight request if one exists
+        if (__fetchInFlight.has(url)) {
+            return await __fetchInFlight.get(url);
+        }
+
+        // Make new request
+        const promise = (async () => {
+            try {
+                const controller = new AbortController();
+                const tid = setTimeout(() => controller.abort(), timeoutMs);
+                const r = await fetch(url, {
+                    cache: 'no-store',
+                    signal: controller.signal,
+                    headers: { 'Accept': 'text/plain, application/json, application/x-ndjson, */*' }
+                });
+                clearTimeout(tid);
+
+                if (!r.ok) {
+                    __fetchCache.set(url, { result: null, ts: Date.now() });
+                    return null;
+                }
+
+                const ct = r.headers.get('content-type') || '';
+                const text = await r.text();
+
+                // Detect HTML fallback (server rewriting 404s to index.html)
+                if (ct.includes('text/html') || text.trim().startsWith('<!DOCTYPE')) {
+                    __fetchCache.set(url, { result: null, ts: Date.now() });
+                    return null;
+                }
+
+                __fetchCache.set(url, { result: text, ts: Date.now() });
+                return text;
+            } catch (e) {
+                __fetchCache.set(url, { result: null, ts: Date.now() });
+                return null;
+            } finally {
+                __fetchInFlight.delete(url);
+            }
+        })();
+
+        __fetchInFlight.set(url, promise);
+        return promise;
+    }
 function normalizePath(p){ if(!p) return '/'; if(!p.startsWith('/')) p = '/' + p; while(p.length>1 && p.endsWith('/')) p = p.slice(0,-1); return p; }
 function basenameNoExt(n){ return (n||'').replace(/\.[^/.]+$/,''); }
 function friendlyDisplayName(n){ return basenameNoExt((n||'').toString()).replace(/[_\.]+/g,' ').trim(); }
 function parseNdjson(text){ if(!text) return []; return text.split(/\r?\n/).map(l=>l.trim()).filter(Boolean).map(l=>{ try{ return JSON.parse(l); }catch(e){ return null; } }).filter(Boolean); }
-async function tryFetchText(url){ try{ const r = await fetch(url, {cache:'no-store'}); if(!r.ok) return null; return await r.text(); }catch(e){ return null; } }
-async function tryFetchJSON(url){ try{ const r = await fetch(url, {cache:'no-store'}); if(!r.ok) return null; return await r.json(); }catch(e){ return null; } }
+    async function tryFetchText(url, timeoutMs = 2000) {
+        return await cachedFetch(url, timeoutMs);
+    }
+
+    async function tryFetchJSON(url, timeoutMs = 2000) {
+        const text = await cachedFetch(url, timeoutMs);
+        if (!text) return null;
+        try { return JSON.parse(text); } catch { return null; }
+    }
 
 /* ---------------- CLASSIFY ---------------- */
 function classifyEntry(obj, parentBucket){
@@ -682,21 +743,32 @@ async function buildSearchIndex(){
     }
   }
 
-  const nestedFetches = [];
-  for(const b of ['Shows','Music','Gallery']){
-    for(const c of (byBucket[b]||[])){
-      if(c.kind === 'dir'){
-        const candidate = `${INDEX_DIR}${c.path}.index.ndjson`.replace('//','/');
-        nestedFetches.push( tryFetchText(candidate).then(nested => ({ bucket: b, parentDir: c.path, text: nested })) );
-        const encoded = c.path.replace(/^\//,'').replace(/\//g,'__');
-        nestedFetches.push( tryFetchText(`${INDEX_DIR}/${encoded}.index.ndjson`).then(nested => ({ bucket: b, parentDir: c.path, text: nested })) );
-      }
+    const nestedFetches = [];
+    for (const b of ['Shows', 'Music', 'Gallery']) {
+        for (const c of (byBucket[b] || [])) {
+            if (c.kind === 'dir') {
+                const candidate = `${INDEX_DIR}${c.path}.index.ndjson`.replace('//', '/');
+                nestedFetches.push({ url: candidate, bucket: b, parentDir: c.path });
+                const encoded = c.path.replace(/^\//, '').replace(/\//g, '__');
+                nestedFetches.push({ url: `${INDEX_DIR}/${encoded}.index.ndjson`, bucket: b, parentDir: c.path });
+            }
+        }
     }
-  }
-  const nestedSettled = await Promise.allSettled(nestedFetches);
-  for(const r of nestedSettled){
-    if(r.status !== 'fulfilled') continue;
-    const data = r.value;
+
+    // Fetch with concurrency limit (3 at a time, 2s timeout each)
+    const nestedResults = [];
+    const concurrency = 3;
+    for (let i = 0; i < nestedFetches.length; i += concurrency) {
+        const batch = nestedFetches.slice(i, i + concurrency);
+        const batchPromises = batch.map(async ({ url, bucket, parentDir }) => {
+            const text = await tryFetchText(url, 2000); // 2s timeout
+            return { bucket, parentDir, text };
+        });
+        const settled = await Promise.allSettled(batchPromises);
+        nestedResults.push(...settled.filter(r => r.status === 'fulfilled').map(r => r.value));
+    }
+    const nestedSettled = nestedResults;
+  for (const data of nestedSettled) {
     if(!data || !data.text) continue;
     const narr = parseNdjson(data.text || '');
     for(const n of narr){
@@ -1492,6 +1564,23 @@ document.addEventListener('click', (ev) => {
 
 /* ESC to close results */
 document.addEventListener('keydown', (e) => { if(e.key === 'Escape'){ resultsPanel.style.display='none'; } });
+
+/* Load ZIM bridge only if ZIM files exist */
+(async function conditionalZimLoad(){
+  try{
+    const list = await tryFetchJSON('/zim-list', 1500);
+    if(Array.isArray(list) && list.length){
+      await new Promise((res, rej)=>{
+        const s = document.createElement('script');
+        s.src = '/assets/zim-bridge.js';
+        s.async = true;
+        s.onload = res; 
+        s.onerror = ()=>{ debugLog('zim-bridge.js not found'); res(); };
+        document.head.appendChild(s);
+      });
+    }
+  }catch(e){ debugLog('ZIM check skipped', String(e)); }
+})();
 </script>
 </body>
 </html>

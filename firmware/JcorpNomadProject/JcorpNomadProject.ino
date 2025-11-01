@@ -1,7 +1,7 @@
-//Jcorp Nomad Project
+//Jcorp Nomad Project ver3
 #include <Arduino.h>
 #define FF_USE_FASTSEEK 1
-#define SD_FREQ_KHZ 10000
+#define SD_FREQ_KHZ 40000
 #include <WiFi.h>
 #include <AsyncTCP.h>
 #include <ESPAsyncWebServer.h>
@@ -15,7 +15,6 @@
 #include "ui.h"
 #include "RGB_lamp.h"
 #include <SPIFFS.h>
-#include <Preferences.h>
 #include "esp_wifi.h"
 #include <esp_task_wdt.h>  // Add watchdog include
 #if defined(ARDUINO_ARCH_ESP32)
@@ -58,7 +57,7 @@ static inline void freeVectorString(std::vector<String> &v) { std::vector<String
 static inline void freeVectorUInt32(std::vector<uint32_t> &v) { std::vector<uint32_t>().swap(v); }
 static inline void closeFile(File &f) { if (f) f.close(); }
 #ifndef INDEX_MIN_HEAP
-#define INDEX_MIN_HEAP 20000UL y
+#define INDEX_MIN_HEAP 20000UL
 #endif
 static inline bool enoughHeapForIndex(size_t estNeededBytes = 40000) {  
   size_t freeHeap = ESP.getFreeHeap();
@@ -123,6 +122,7 @@ static bool sdScanned = false;
 const uint32_t SD_SCAN_DELAY = 5000;  // milliseconds after boot
 SemaphoreHandle_t sdMutex = NULL; 
 volatile bool sdbarDirty = false;
+volatile int activeStreams = 0;
 struct IndexBuildArgs {
   String dir;   // directory path to build index for (e.g. "/Music/Album")
   String out;   // output index filename
@@ -993,9 +993,6 @@ volatile bool settingsReady = false;       // set to true after loadSettings() r
 volatile bool sdScanInProgress = false;    // true while SD scan is performing its initial pass
 volatile bool sdScanCompleted = false;     // set to true after the initial SD scan completes
 
-// Global streaming connection counter to prevent overload
-static volatile int activeStreams = 0;
-static const int MAX_CONCURRENT_STREAMS = 6; // Conservative limit
 volatile bool bootIndexAllowed = false;    // set by boot coordinator once it's OK for index to run
 
 unsigned long lastSDScanTime = 0;
@@ -1336,29 +1333,18 @@ String urlDecode(const String& str) {
     return decoded;
 }
 
-// ==== MEDIA STREAM HANDLER ====
-// Handles video/audio streaming via range requests
+#include <map>
+#include <set>
+#include <utility> // for std::pair
+
 void handleRangeRequest(AsyncWebServerRequest *request) {
-  // Connection throttling - limit concurrent streams (this doesnt realy work at all)
-  if (activeStreams >= 8) {
-    Serial.printf("[RangeHandler] Too many active streams (%d), rejecting request\n", activeStreams);
-    request->send(503, "text/plain", "Server busy - too many concurrent streams");
-    return;
-  }
-
-  // Increment stream counter
-  activeStreams++;
-  Serial.printf("[RangeHandler] Active streams: %d\n", activeStreams);
-
-  // Resolve file path (either ?file=... OR direct URL)
   String filePath;
   if (request->hasParam("file")) {
     filePath = request->getParam("file")->value();
   } else {
-    filePath = urlDecode(request->url()); // e.g. "/Books/comic.cbz"
+    filePath = urlDecode(request->url());
   }
 
-  // Ensure absolute + normalized path
   if (!filePath.startsWith("/")) filePath = "/" + filePath;
   filePath = normalizePath(filePath);
 
@@ -1366,152 +1352,143 @@ void handleRangeRequest(AsyncWebServerRequest *request) {
                 filePath.c_str(), request->method(),
                 request->hasHeader("Range") ? request->header("Range").c_str() : "");
 
-  // Existence check
   if (!SD_MMC.exists(filePath)) {
     Serial.printf("[RangeHandler] file not found: %s\n", filePath.c_str());
-    activeStreams--; // Decrement on error
     request->send(404, "text/plain", "File not found");
     return;
   }
 
-  // Open file with recovery guard
   File file = SD_MMC.open(filePath, "r");
   if (!file) {
     Serial.printf("[SD] open() failed for '%s' — trigger recovery\n", filePath.c_str());
-    activeStreams--; // Decrement on error
     sdErrorFlag = true;
     sdErrorCooldownUntil = millis() + 5000;
     request->send(503, "text/plain", "SD error — retrying shortly");
     return;
   }
 
-  uint64_t fileSize = (uint64_t)file.size();
+  size_t fileSize = file.size();
 
-  // Add disconnect handler to clean up stream counter
-  request->onDisconnect([](){
-    activeStreams--;
-    if (activeStreams < 0) activeStreams = 0; // Safety check
-    Serial.printf("[STREAM] Stream ended - %d active streams remaining\n", activeStreams);
-  });
-
-  // HEAD: headers only (tell client we accept ranges)
   if (request->method() == HTTP_HEAD) {
     String hrFileSize = humanSize(fileSize);
     Serial.printf("[RangeHandler] HEAD %s size=%s — sending headers only\n",
                   filePath.c_str(), hrFileSize.c_str());
-
     AsyncWebServerResponse *headResponse = request->beginResponse(200, "application/octet-stream", "");
     headResponse->addHeader("Accept-Ranges", "bytes");
-    headResponse->addHeader("Content-Length", String((unsigned long)fileSize));
+    headResponse->addHeader("Content-Length", String(fileSize));
     headResponse->addHeader("Cache-Control", "no-cache");
     headResponse->addHeader("Pragma", "no-cache");
     request->send(headResponse);
     file.close();
-    activeStreams--; // Decrement stream counter
     return;
   }
 
-  // Parse Range header (robust handling)
   String rangeHeader = "";
   if (request->hasHeader("Range")) rangeHeader = request->header("Range");
 
-  auto parseULL = [](const String &s) -> uint64_t {
-    if (!s.length()) return 0ULL;
-    return (uint64_t) strtoull(s.c_str(), NULL, 10);
-  };
+  size_t startByte = 0;
+  size_t endByte = fileSize - 1;
+  bool openEndedRange = false;
 
-  uint64_t startByte = 0;
-  uint64_t endByte = (fileSize == 0) ? 0 : (fileSize - 1);
-  uint64_t contentLength = fileSize;
-
-  if (rangeHeader.length() && rangeHeader.startsWith("bytes=") && fileSize > 0) {
-    String spec = rangeHeader.substring(6);
-    int dashIdx = spec.indexOf('-');
-    if (dashIdx >= 0) {
-      String sStart = spec.substring(0, dashIdx);
-      String sEnd = spec.substring(dashIdx + 1);
-
-      if (sStart.length() == 0 && sEnd.length() > 0) {
-        uint64_t suffixLen = parseULL(sEnd);
-        if (suffixLen > 0) {
-          startByte = (suffixLen >= fileSize) ? 0 : fileSize - suffixLen;
-          endByte = fileSize - 1;
-        }
+  if (rangeHeader.length() && rangeHeader.startsWith("bytes=")) {
+    int dashIndex = rangeHeader.indexOf('-');
+    if (dashIndex > 6) {
+      startByte = rangeHeader.substring(6, dashIndex).toInt();
+    }
+    if (dashIndex + 1 < rangeHeader.length()) {
+      String endStr = rangeHeader.substring(dashIndex + 1);
+      if (endStr.length() > 0) {
+        endByte = endStr.toInt();
       } else {
-        if (sStart.length()) startByte = parseULL(sStart);
-        if (sEnd.length()) endByte = parseULL(sEnd);
-        else endByte = fileSize - 1;
+        openEndedRange = true;
       }
+    } else {
+      openEndedRange = true;
     }
   }
 
-  if (fileSize == 0) {
-    startByte = 0;
-    endByte = 0;
-    contentLength = 0;
-  } else {
-    if (startByte >= fileSize) startByte = fileSize - 1;
-    if (endByte >= fileSize) endByte = fileSize - 1;
-    if (endByte < startByte) endByte = startByte;
-    contentLength = (endByte >= startByte) ? (endByte - startByte + 1) : 0;
+  if (openEndedRange && (endByte - startByte) > (50 * 1024 * 1024)) {
+    endByte = startByte + (50 * 1024 * 1024) - 1;
+    Serial.printf("[RangeHandler] Capping open-ended range to 50MB: %s-%s\n", 
+                  humanSize(startByte).c_str(), humanSize(endByte).c_str());
   }
 
-  String hrFileSize = humanSize(fileSize);
-  String hrStart = humanSize(startByte);
-  String hrEnd = humanSize(endByte);
-  String hrLen = humanSize(contentLength);
-  String rawRange = rangeHeader.length() ? rangeHeader : String("-");
+  if (endByte >= fileSize) endByte = fileSize - 1;
+  if (startByte > endByte) startByte = endByte;
+  size_t contentLength = endByte - startByte + 1;
 
   Serial.printf("[RangeHandler] %s size=%s Range=\"%s\" start=%s end=%s len=%s\n",
-                filePath.c_str(), hrFileSize.c_str(),
-                rawRange.c_str(), hrStart.c_str(), hrEnd.c_str(), hrLen.c_str());
+                filePath.c_str(), humanSize(fileSize).c_str(),
+                rangeHeader.length() ? rangeHeader.c_str() : "-",
+                humanSize(startByte).c_str(), humanSize(endByte).c_str(), humanSize(contentLength).c_str());
 
-  // Determine mime type
   String mimeType = "application/octet-stream";
   String pLower = filePath;
   pLower.toLowerCase();
+  
+  bool isMediaStream = false;
   if (pLower.endsWith(".epub")) mimeType = "application/epub+zip";
   else if (pLower.endsWith(".pdf")) mimeType = "application/pdf";
-  else if (pLower.endsWith(".mp3")) mimeType = "audio/mpeg";
-  else if (pLower.endsWith(".flac")) mimeType = "audio/flac";
-  else if (pLower.endsWith(".wav")) mimeType = "audio/wav";
-  else if (pLower.endsWith(".ogg")) mimeType = "audio/ogg";
-  else if (pLower.endsWith(".aac")) mimeType = "audio/aac";
-  else if (pLower.endsWith(".m4a")) mimeType = "audio/mp4";
-  else if (pLower.endsWith(".mp4")) mimeType = "video/mp4";
-  else if (pLower.endsWith(".webm")) mimeType = "video/webm";
-  else if (pLower.endsWith(".m4v")) mimeType = "video/x-m4v";
+  else if (pLower.endsWith(".mp3")) { mimeType = "audio/mpeg"; isMediaStream = true; }
+  else if (pLower.endsWith(".flac")) { mimeType = "audio/flac"; isMediaStream = true; }
+  else if (pLower.endsWith(".wav")) { mimeType = "audio/wav"; isMediaStream = true; }
+  else if (pLower.endsWith(".ogg")) { mimeType = "audio/ogg"; isMediaStream = true; }
+  else if (pLower.endsWith(".aac")) { mimeType = "audio/aac"; isMediaStream = true; }
+  else if (pLower.endsWith(".m4a")) { mimeType = "audio/mp4"; isMediaStream = true; }
+  else if (pLower.endsWith(".mp4")) { mimeType = "video/mp4"; isMediaStream = true; }
+  else if (pLower.endsWith(".webm")) { mimeType = "video/webm"; isMediaStream = true; }
+  else if (pLower.endsWith(".m4v")) { mimeType = "video/x-m4v"; isMediaStream = true; }
   else if (pLower.endsWith(".jpg") || pLower.endsWith(".jpeg")) mimeType = "image/jpeg";
   else if (pLower.endsWith(".png")) mimeType = "image/png";
   else if (pLower.endsWith(".cbz")) mimeType = "application/vnd.comicbook+zip";
   else if (pLower.endsWith(".cbr")) mimeType = "application/vnd.comicbook-rar";
 
-  // Async chunked response using original working approach
+  if (isMediaStream && contentLength > 10000) {
+    mediaStreamingActive = true;
+    lastStreamActivity = millis();
+    shutdownBackgroundTasksForStreaming(); 
+  }
+
+  bool isProbeRequest = (contentLength <= 2048);
+
+  if (isProbeRequest) {
+    uint8_t *probeBuffer = (uint8_t*)malloc(contentLength);
+    if (probeBuffer) {
+      file.seek(startByte);
+      size_t bytesRead = file.read(probeBuffer, contentLength);
+      file.close();
+      
+      AsyncWebServerResponse *response = request->beginResponse_P(206, mimeType.c_str(), probeBuffer, contentLength);
+      response->addHeader("Access-Control-Allow-Origin", "*");
+      response->addHeader("Accept-Ranges", "bytes");
+      response->addHeader("Content-Range", "bytes " + String(startByte) + "-" + String(endByte) + "/" + String(fileSize));
+      response->addHeader("Cache-Control", "no-cache");
+      request->send(response);
+      free(probeBuffer);
+      return;
+    }
+  }
+
   AsyncWebServerResponse *response = request->beginResponse(
     mimeType,
     contentLength,
-    [file, startByte, endByte, contentLength] (uint8_t *buffer, size_t maxLen, size_t index) mutable -> size_t {
-      uint64_t pos64 = (uint64_t)startByte + (uint64_t)index;
-      file.seek((size_t)pos64);
-
-      uint64_t bytesLeft64 = (uint64_t)endByte - pos64 + 1ULL;
-      size_t bytesLeft = (bytesLeft64 > (uint64_t)SIZE_MAX) ? SIZE_MAX : (size_t)bytesLeft64;
-      size_t bytesToRead = (bytesLeft < maxLen) ? bytesLeft : maxLen;
-
+    [file, startByte, endByte, contentLength](uint8_t *buffer, size_t maxLen, size_t index) mutable -> size_t {
+      if (index == 0) {
+        file.seek(startByte);
+      }
+      
+      size_t remaining = contentLength - index;
+      size_t bytesToRead = min(maxLen, remaining);
       size_t bytesRead = file.read(buffer, bytesToRead);
 
       if (bytesRead == 0) {
         Serial.println("[SD] read() failed — recovery");
         file.close();
-        activeStreams--; // Decrement stream counter on error
-        sdErrorFlag = true;
-        sdErrorCooldownUntil = millis() + 5000;
         return 0;
       }
 
-      if ((uint64_t)index + (uint64_t)bytesRead >= (uint64_t)contentLength) {
+      if (index + bytesRead >= contentLength) {
         file.close();
-        activeStreams--; // Decrement stream counter when complete
       }
       return bytesRead;
     }
@@ -1522,13 +1499,12 @@ void handleRangeRequest(AsyncWebServerRequest *request) {
   response->addHeader("Access-Control-Allow-Headers", "Range, Content-Type, Accept");
   response->addHeader("Accept-Ranges", "bytes");
   response->addHeader("Content-Range", "bytes " + String(startByte) + "-" + String(endByte) + "/" + String(fileSize));
-  response->addHeader("Content-Length", String((unsigned long)contentLength));
+  response->addHeader("Content-Length", String(contentLength));
   response->addHeader("Cache-Control", "no-cache");
   response->addHeader("Pragma", "no-cache");
   response->setCode(206);
   request->send(response);
 }
-
 void handleListFiles(AsyncWebServerRequest *request) {
     if (!request->hasParam("dir")) {
         request->send(400, "application/json", "{\"error\":\"Missing 'dir' parameter\"}");
@@ -2931,7 +2907,7 @@ void setup() {
             return;
         }
 
-        if (!SD_MMC.begin("/sdcard", true, false, SDMMC_FREQ_DEFAULT, 12)) {
+        if (!SD_MMC.begin("/sdcard", true, false, SD_FREQ_KHZ, 12)) {
             Serial.println("ERROR: SDMMC Card initialization failed.");
             // show error on UI
             lv_obj_clear_flag(ui_MediaGen, LV_OBJ_FLAG_HIDDEN);
@@ -2939,7 +2915,7 @@ void setup() {
             lv_timer_handler();
             return;
         }
-  
+
     webLogf("success", "SD Card initialized successfully - Size: %.1f GB", (float)SD_MMC.cardSize() / (1024.0 * 1024.0 * 1024.0));
 
     // Initialize SD status for LVGL indicator
@@ -3543,6 +3519,12 @@ void setup() {
       String userAgent = "";
       if (request->hasHeader("User-Agent")) userAgent = request->header("User-Agent");
       String clientKey = userAgent.length() ? userAgent : String("NO_UA");
+
+      // Block WhatsApp link preview requests
+      if (userAgent.indexOf("WAChat") >= 0 || userAgent.indexOf("WhatsApp") >= 0) {
+        request->send(204);
+        return;
+      }
 
       if (userAgent.length()) {
         Serial.println("[User-Agent] " + userAgent);
@@ -4554,7 +4536,7 @@ void loop() {
         checkStreamingTimeout();
 
         // Periodic cleanup of stream counter (safety net)
-        if (activeStreams < 0) activeStreams = 0;
+        // if (activeStreams < 0) activeStreams = 0;
     }
 
     if (millis() - lastTempReading > 6000) {

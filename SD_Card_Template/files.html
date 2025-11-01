@@ -28,7 +28,7 @@
       padding: 0 0.5rem;
     }
 
-    /* Dark mode overrides (applied by .dark class on body) */
+    /* Dark mode  */
     body.dark {
       background: #07121a;
       color: #e6eef8;
@@ -215,81 +215,289 @@
   <footer>© <span id="year"></span> Jcorp Nomad</footer>
 
   <script>
-    /* ---------- THEME BOOT & SYNC ---------- */
-    const THEME_KEY = 'nomad_dark_mode';
-    function applyThemeFlag(dark){
-      document.body.classList.toggle('dark', !!dark);
-      // Keep search readable: forces white background + black text for search inputs
-      const search = document.querySelector('.toolbar input[type="search"]');
-      if (search) { search.style.background = '#fff'; search.style.color = '#000'; }
-    }
-    // apply on load
-    (function initThemeFromStorage(){
+    /* ---------- THEME ---------- */
+    const THEME_KEY = 'nomad.dark';
+    const files = [];
+    let filtered = [];
+
+    function applyThemeFlag(dark) {
+      const isDark = !!dark;
+      document.body.classList.toggle('dark', isDark);
       try {
-        const saved = localStorage.getItem(THEME_KEY);
-        const isDark = (saved === 'true');
-        applyThemeFlag(isDark);
-      } catch (e) { applyThemeFlag(false); }
-    })();
-    // listen for theme changes in menu (keeps pages in sync)
-    window.addEventListener('storage', (ev) => {
-      if (ev.key === THEME_KEY) {
-        const dark = ev.newValue === 'true';
-        applyThemeFlag(dark);
+        // store explicit string to avoid ambiguity when reading back
+        localStorage.setItem(THEME_KEY, isDark ? 'true' : 'false');
+      } catch (e) {
+        console.warn('Could not persist theme preference:', e);
       }
-    });
+    }
 
-    /* ---------- page logic ---------- */
-    document.getElementById('year').textContent = new Date().getFullYear();
+    function initThemeFromStorage() {
+      const saved = localStorage.getItem(THEME_KEY);
+      if (saved !== null) {
+        applyThemeFlag(saved === 'true');
+      } else {
+        // No explicit saved preference 
+        const prefersDark = window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches;
+        applyThemeFlag(prefersDark);
+      }
 
-    const fileListEl = document.getElementById('fileList');
-    const searchInput = document.getElementById('searchInput');
-    const sortSelect = document.getElementById('sortSelect');
-    const typeFilter = document.getElementById('typeFilter');
-
-    let files = [], filtered = [];
+      try {
+        if (window.matchMedia) {
+          const mq = window.matchMedia('(prefers-color-scheme: dark)');
+          const onChange = (e) => {
+            // only auto-update if user hasn't explicitly set a preference
+            if (localStorage.getItem(THEME_KEY) === null) {
+              applyThemeFlag(e.matches);
+            }
+          };
+          // use modern API when available
+          if (typeof mq.addEventListener === 'function') {
+            mq.addEventListener('change', onChange);
+          } else if (typeof mq.addListener === 'function') {
+            mq.addListener(onChange);
+          }
+        }
+      } catch (e) {
+        console.warn('Could not attach prefers-color-scheme listener:', e);
+      }
+    }
 
     function formatBytes(bytes) {
-      if (!bytes && bytes !== 0) return '0 B';
+      if (bytes === 0) return '0 Bytes';
       const k = 1024;
-      const sizes = ['B', 'KB', 'MB', 'GB', 'TB'];
-      const i = Math.floor(Math.log(Math.max(bytes || 0, 1)) / Math.log(k));
-      return parseFloat((bytes / Math.pow(k, i)).toFixed(1)) + ' ' + sizes[i];
+      const sizes = ['Bytes', 'KB', 'MB', 'GB'];
+      const i = Math.floor(Math.log(bytes) / Math.log(k));
+      return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
     }
 
-    async function init() {
+    async function fetchIndexWithFallback(path) {
+      const INDEX_ENDPOINT = '/api/index';
+      const FALLBACK_INDEX_FILES = ['Files.index.ndjson', '.system-index/Files.index.ndjson'];
+
+      function joinPaths(a, b) {
+        return (a || '').replace(/\/+$/, '') + '/' + (b || '').replace(/^\/+/, '');
+      }
+
+      function normalizePath(p) {
+        return '/' + (p || '').replace(/^\/+/, '').replace(/\/+$/, '');
+      }
+
+      // Try the API index first. If the API responds but the index is partial
+      // (header.count > entries.length) fall back to static index files.
       try {
-        // try NDJSON index; fallback to generic /media.json if NDJSON missing
-        let text = null;
-        try {
-          const res = await fetch('/.system-index/Files.index.ndjson', {cache:'no-store', credentials:'same-origin'});
-          if (!res.ok) throw new Error('ndjson fetch failed');
-          text = await res.text();
-        } catch (e) {
-          // try a more generic path for index
-          try {
-            const res2 = await fetch('/Files.index.ndjson', {cache:'no-store', credentials:'same-origin'});
-            if (res2.ok) text = await res2.text();
-          } catch(e2){}
+        const apiUrl = `${INDEX_ENDPOINT}?path=${encodeURIComponent(normalizePath(path))}&_=${Date.now()}`;
+        const res = await fetch(apiUrl, { cache: 'no-store', credentials: 'same-origin' });
+
+        if (res.status === 202) {
+          // Server indicates index is being built
+          console.log('Files index is building (202 status)');
+          return { source: null, header: null, entries: [] };
         }
 
-        if (text && text.trim().length) {
-          files = text.trim().split('\n')
-            .map(line => {
-              try { return JSON.parse(line); } catch (e) { return null; }
-            })
+        if (res.ok) {
+          const text = await res.text();
+          // parseNDJSONWithHeader is defined later in the file
+          const parsed = parseNDJSONWithHeader(text);
+
+          // If no header signature, treat as unavailable to avoid trusting incorrect data
+          if (!parsed.header || !parsed.header.sig) {
+            console.warn('No index signature found in API response. Falling back to static files if available.');
+          } else {
+            // If header declares a count and we have a full set, return it.
+            if (parsed.header.count === undefined || parsed.entries.length >= parsed.header.count) {
+              if (parsed.entries && parsed.entries.length > 0) {
+                return { source: 'api', header: parsed.header, entries: parsed.entries };
+              }
+            } else {
+              // Partial index from API -> fall through to try fallback files.
+              console.warn('Partial index received from API; attempting static fallback files.');
+            }
+          }
+        }
+      } catch (e) {
+        console.error('Files index fetch error (API):', e);
+      }
+
+      // Try fallback static index files in order
+      for (const fname of FALLBACK_INDEX_FILES) {
+        try {
+          const pathAttempt = joinPaths(path, fname);
+          const url = pathAttempt + '?_=' + Date.now();
+          const res = await fetch(url, { cache: 'no-store', credentials: 'same-origin' });
+          if (!res.ok) continue;
+          const text = await res.text();
+          const parsed = parseNDJSONWithHeader(text);
+          if (parsed.entries && parsed.entries.length > 0) {
+            return { source: pathAttempt, header: parsed.header, entries: parsed.entries };
+          }
+        } catch (e) {
+          console.warn('Fallback file attempt failed:', fname, e);
+        }
+      }
+
+      // No index found at all
+      console.warn('No files index found in API or fallback files');
+      return { source: null, header: null, entries: [] };
+    }
+
+    // Updated init function with better error handling
+    async function init() {
+      try {
+        const fileListEl = document.getElementById('fileList');
+        fileListEl.innerHTML = '<li>Loading files...</li>';
+
+        // Try to fetch using the new indexing system
+        const resp = await fetchIndexWithFallback('/');
+        if (resp.entries && resp.entries.length > 0) {
+          files.length = 0;
+          files.push(...resp.entries
             .filter(Boolean)
-            .filter(obj => obj.t === 'f' || obj.t === 'f' /* ensure only files */)
+            .filter(obj => obj.t === 'f' || obj.type === 'f') // ensure only files
             .map(obj => {
-              const path = obj.p || (obj.n && obj.n.startsWith('/') ? obj.n : '/' + (obj.n || ''));
-              const ext = (obj.n || '').split('.').pop().toLowerCase();
+              const path = obj.p || obj.path || (obj.n && obj.n.startsWith('/') ? obj.n : '/' + (obj.n || ''));
+              const ext = (obj.n || obj.name || '').split('.').pop().toLowerCase();
               return {
-                name: obj.n || path.split('/').pop(),
+                name: obj.n || obj.name || path.split('/').pop(),
                 path: path,
                 type: ext,
                 size: obj.sz || obj.size || 0
               };
-            });
+            })
+          );
+        } else {
+          // fallback: try media.json or /media.json (backup for legacy system)
+          try {
+            const r = await fetch('/media.json', {cache:'no-store', credentials:'same-origin'});
+            if (r.ok) {
+              const j = await r.json();
+              const raw = j.files || j.Files || [];
+              files.length = 0;
+              files.push(...raw.map(obj => {
+                const p = obj.path || obj.file || obj.url || ('/' + (obj.name || ''));
+                const name = obj.name || obj.title || p.split('/').pop();
+                const ext = (name.split('.').pop() || '').toLowerCase();
+                return { name, path: p, type: ext, size: obj.sz || obj.size || 0 };
+              }).filter(Boolean));
+            } else {
+              throw new Error('no fallback data');
+            }
+          } catch (e) {
+            console.error('No index available to build Files list', e);
+            fileListEl.innerHTML = '<li>No files found. The index may be building.</li>';
+            return;
+          }
+        }
+
+        applyFilters();
+      } catch (e) {
+        console.error('Error loading files:', e);
+        document.getElementById('fileList').innerHTML = '<li>Error loading files.</li>';
+      }
+    }
+    function parseNDJSONWithHeader(text) {
+      const lines = (text || '').split('\n').filter(Boolean);
+      if (lines.length === 0) return { header: null, entries: [] };
+
+      try {
+        const header = JSON.parse(lines[0]);
+        const entries = lines.slice(1).map(line => JSON.parse(line));
+        return { header, entries };
+      } catch (e) {
+        console.warn('NDJSON parse failed, trying raw lines:', e);
+        const safeJsonParse = (line) => {
+          try { return JSON.parse(line); } catch (_) { return null; }
+        };
+        return { header: null, entries: lines.map(safeJsonParse).filter(Boolean) };
+      }
+    }
+
+    async function fetchIndexWithFallback(path) {
+      const INDEX_ENDPOINT = '/api/index';
+      const FALLBACK_INDEX_FILES = ['.system-index/Files.index.ndjson', 'Files.index.ndjson'];
+
+      function joinPaths(a, b) {
+        return (a || '').replace(/\/+$/, '') + '/' + (b || '').replace(/^\/+/, '');
+      }
+
+      function normalizePath(p) {
+        return '/' + (p || '').replace(/^\/+/, '').replace(/\/+$/, '');
+      }
+
+      try {
+        const apiUrl = `${INDEX_ENDPOINT}?path=${encodeURIComponent(normalizePath(path))}&_=${Date.now()}`;
+        const res = await fetch(apiUrl, { cache:'no-store', credentials:'same-origin' });
+        if (res.ok) {
+          const text = await res.text();
+          const parsed = parseNDJSONWithHeader(text);
+
+          // Check if we have a valid header signature
+          if (!parsed.header || !parsed.header.sig) {
+            console.warn('No index signature found in files. Index may be building or missing.');
+            // Don't trigger reindex to avoid loops.
+            return { source: null, header: null, entries: [] };
+          }
+
+          if (parsed.header && parsed.header.count !== undefined && parsed.entries.length < parsed.header.count) {
+            // partial -> fallback
+          } else if (parsed.entries.length > 0) {
+            return { source: 'api', header: parsed.header, entries: parsed.entries };
+          }
+        } else if (res.status === 202) {
+          // Server is building index
+          console.log('Files index is building (202 status)');
+          return { source: null, header: null, entries: [] };
+        }
+      } catch (e) {
+        console.error('Files index fetch error:', e);
+      }
+
+      // Try fallback files
+      for (const fname of FALLBACK_INDEX_FILES) {
+        try {
+          const pathAttempt = joinPaths(path, fname);
+          const url = pathAttempt + '?_=' + Date.now();
+          const res = await fetch(url, { cache:'no-store', credentials:'same-origin' });
+          if (res.ok) {
+            const text = await res.text();
+            const parsed = parseNDJSONWithHeader(text);
+            if (parsed.entries && parsed.entries.length > 0) {
+              return { source: pathAttempt, header: parsed.header, entries: parsed.entries };
+            }
+          }
+        } catch (e) {
+          console.warn('Fallback file attempt failed:', fname, e);
+        }
+      }
+
+      // No index found at all
+      console.warn('No files index found in API or fallback files');
+      return { source: null, header: null, entries: [] };
+    }
+
+    // Updated init function with better error handling
+    async function init() {
+      try {
+        const fileListEl = document.getElementById('fileList');
+        fileListEl.innerHTML = '<li>Loading files...</li>';
+
+        // Try to fetch using the new indexing system
+        const resp = await fetchIndexWithFallback('/');
+        if (resp.entries && resp.entries.length > 0) {
+          files.length = 0;
+          files.push(...resp.entries
+            .filter(Boolean)
+            .filter(obj => obj.t === 'f' || obj.type === 'f') // ensure only files
+            .map(obj => {
+              const path = obj.p || obj.path || (obj.n && obj.n.startsWith('/') ? obj.n : '/' + (obj.n || ''));
+              const ext = (obj.n || obj.name || '').split('.').pop().toLowerCase();
+              return {
+                name: obj.n || obj.name || path.split('/').pop(),
+                path: path,
+                type: ext,
+                size: obj.sz || obj.size || 0
+              };
+            })
+          );
         } else {
           // fallback: try media.json or /media.json
           try {
@@ -297,26 +505,27 @@
             if (r.ok) {
               const j = await r.json();
               const raw = j.files || j.Files || [];
-              files = raw.map(obj => {
+              files.length = 0;
+              files.push(...raw.map(obj => {
                 const p = obj.path || obj.file || obj.url || ('/' + (obj.name || ''));
                 const name = obj.name || obj.title || p.split('/').pop();
                 const ext = (name.split('.').pop() || '').toLowerCase();
                 return { name, path: p, type: ext, size: obj.sz || obj.size || 0 };
-              }).filter(Boolean);
+              }).filter(Boolean));
             } else {
               throw new Error('no fallback data');
             }
           } catch (e) {
             console.error('No index available to build Files list', e);
-            fileListEl.innerHTML = '<li>Error loading files.</li>';
+            fileListEl.innerHTML = '<li>No files found. The index may be building.</li>';
             return;
           }
         }
 
         applyFilters();
       } catch (e) {
-        console.error('Error loading NDJSON:', e);
-        fileListEl.innerHTML = '<li>Error loading files.</li>';
+        console.error('Error loading files:', e);
+        document.getElementById('fileList').innerHTML = '<li>Error loading files.</li>';
       }
     }
 
@@ -373,6 +582,7 @@
     sortSelect.addEventListener('change', applySort);
 
     // Boot
+    initThemeFromStorage();
     init();
   </script>
 </body>

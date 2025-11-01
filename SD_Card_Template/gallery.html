@@ -10,7 +10,7 @@
     :root{--primary:#007bff;--primary-dark:#0056b3;--bg:#f4f4f9;--text:#333;--radius:8px;--shadow:0 4px 12px rgba(0,0,0,.08)}
     *,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
     body{font-family:Arial,Helvetica,sans-serif;background:var(--bg);color:var(--text);display:flex;flex-direction:column;min-height:100vh;padding:0 .5rem;overflow-x:hidden}
-    /* simple dark-mode adjustments (menu toggles .dark on <body>) */
+    /* dark-mode */
     body.dark{ background:#0b0f14; color:#e6eef8; }
     body.dark .toolbar, body.dark .grid-wrapper, body.dark .media-card { background:#07101a; }
     body.dark header{ background:#051226; }
@@ -141,7 +141,6 @@ document.getElementById('year').textContent = new Date().getFullYear();
 /* ---------- THEME BOOT & SYNC ---------- */
 function applyThemeFlag(dark){
   document.body.classList.toggle('dark', !!dark);
-  // keep any toolbar search readable in light background
   const search = document.querySelector('.toolbar input[type="search"]');
   if(search){ search.style.background = '#fff'; search.style.color = '#000'; }
 }
@@ -149,7 +148,7 @@ function applyThemeFlag(dark){
 (function initThemeFromStorage(){
   try{ const saved = localStorage.getItem(THEME_KEY); applyThemeFlag(saved === 'true'); } catch(e){ applyThemeFlag(false); }
 })();
-// listen for theme changes in menu (keeps pages in sync)
+// listen for theme changes in other tabs/pages (keeps pages in sync)
 window.addEventListener('storage', (ev) => {
   if(ev.key === THEME_KEY){
     const dark = ev.newValue === 'true';
@@ -414,13 +413,70 @@ async function fetchIndexWithFallback(path){
     if(res.ok){
       const text = await res.text();
       const parsed = parseNDJSONWithHeader(text);
+
+      // Check if we have a valid header signature
+      if(!parsed.header || !parsed.header.sig){
+        console.warn('No index signature found in gallery. Index may be building or missing - triggering reindex.');
+
+        // Trigger a reindex
+        try {
+          const reindexUrl = '/api/reindex';
+          const reindexRes = await fetch(reindexUrl, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+            body: `path=${encodeURIComponent(path)}`
+          });
+
+          if (reindexRes.ok) {
+            console.log('Gallery reindex triggered successfully');
+            // Show loading message
+            grid.innerHTML = '<p style="grid-column:1/-1;text-align:center;color:var(--primary-dark);">Building gallery index... Please wait.</p>';
+
+            // Retry after a delay
+            setTimeout(async () => {
+              try {
+                await refreshIndex();
+                renderPage();
+              } catch(e) {
+                console.error('Retry refreshIndex failed', e);
+                grid.innerHTML = '<p style="grid-column:1/-1;text-align:center;color:var(--primary-dark);">Could not load gallery.</p>';
+              }
+            }, 3000);
+            return { source: null, header: null, entries: [] };
+          } else {
+            console.error('Failed to trigger gallery reindex:', reindexRes.status);
+          }
+        } catch(reindexErr) {
+          console.error('Error triggering gallery reindex:', reindexErr);
+        }
+      }
+
       if(parsed.header && parsed.header.count !== undefined && parsed.entries.length < parsed.header.count){
         // partial -> fallback
       } else if(parsed.entries.length > 0){
         return { source: 'api', header: parsed.header, entries: parsed.entries };
       }
+    } else if(res.status === 202) {
+      // Server is building index - show message and retry
+      console.log('Gallery index is building (202 status)');
+      grid.innerHTML = '<p style="grid-column:1/-1;text-align:center;color:var(--primary-dark);">Building gallery index... Please wait.</p>';
+
+      setTimeout(async () => {
+        try {
+          await refreshIndex();
+          renderPage();
+        } catch(e) {
+          console.error('Retry after 202 failed', e);
+          grid.innerHTML = '<p style="grid-column:1/-1;text-align:center;color:var(--primary-dark);">Could not load gallery.</p>';
+        }
+      }, 3000);
+      return { source: null, header: null, entries: [] };
     }
-  }catch(e){}
+  }catch(e){
+    console.error('Gallery index fetch error:', e);
+  }
+
+  // Try fallback files
   for(const fname of FALLBACK_INDEX_FILES){
     try{
       const pathAttempt = joinPaths(ROOT, fname);
@@ -430,6 +486,35 @@ async function fetchIndexWithFallback(path){
       }
     }catch(e){}
   }
+
+  // If no fallback worked, trigger reindex as last resort
+  console.warn('No gallery index found in API or fallback files - triggering reindex');
+  try {
+    const reindexUrl = '/api/reindex';
+    const reindexRes = await fetch(reindexUrl, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: `path=${encodeURIComponent(path)}`
+    });
+
+    if (reindexRes.ok) {
+      console.log('Gallery fallback reindex triggered successfully');
+      grid.innerHTML = '<p style="grid-column:1/-1;text-align:center;color:var(--primary-dark);">Building gallery index... Please wait.</p>';
+
+      setTimeout(async () => {
+        try {
+          await refreshIndex();
+          renderPage();
+        } catch(e) {
+          console.error('Retry after fallback reindex failed', e);
+          grid.innerHTML = '<p style="grid-column:1/-1;text-align:center;color:var(--primary-dark);">Could not load gallery.</p>';
+        }
+      }, 3000);
+    }
+  } catch(reindexErr) {
+    console.error('Error triggering gallery fallback reindex:', reindexErr);
+  }
+
   return { source: null, header: null, entries: [] };
 }
 
@@ -679,7 +764,7 @@ async function handleHashNavigation(hashObj){
       found = items.find(it => normalizePath(it.path).endsWith(wantBase));
     }
     if(found){
-      // try to set currentPage so card is visible (if present in filtered)
+      // try to set currentPage so card is visible
       const idx = filtered.findIndex(it => normalizePath(it.path) === normalizePath(found.path));
       if(idx >= 0){
         currentPage = Math.floor(idx / pageSize) + 1;
@@ -729,3 +814,4 @@ init();
 </script>
 </body>
 </html>
+
