@@ -114,10 +114,80 @@
     position:absolute;left:0;top:0;bottom:0;width:6px;background:linear-gradient(180deg,var(--primary-600),var(--primary));border-top-left-radius:8px;border-bottom-left-radius:8px;
   }
 
-  .folder-card{background: linear-gradient(180deg, rgba(0,0,0,0.02), rgba(0,0,0,0.01));border-radius:10px;padding:8px;margin:8px 0;position:relative;}
-  .folder{padding:10px;border-radius:8px;margin:6px 0;display:flex;align-items:center;gap:8px;cursor:pointer}
-  .folder .meta{margin-left:auto;color:var(--muted);font-weight:700}
-  .subtracks{padding-left:10px;margin-top:6px;display:flex;flex-direction:column;gap:6px}
+  /* Folder card container - wraps each subfolder */
+  .folder-card {
+    background: rgba(0,0,0,0.015);
+    border: 1px solid rgba(0,0,0,0.08);
+    border-radius: 8px;
+    margin: 8px 4px;
+    overflow: hidden;
+    transition: all 0.2s ease;
+  }
+
+  /* Expanded folder card gets highlighted */
+  .folder-card.expanded {
+    background: rgba(0,123,255,0.04);
+    border-color: rgba(0,123,255,0.3);
+    box-shadow: 0 2px 8px rgba(0,123,255,0.12);
+  }
+
+  /* Folder header (clickable area) */
+  .folder {
+    padding: 10px 12px;
+    border-radius: 0;
+    margin: 0;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    cursor: pointer;
+    user-select: none;
+    font-weight: 700;
+    background: transparent;
+    transition: background 0.15s ease;
+  }
+
+  /* Add dropdown indicator */
+  .folder::before {
+    content: "▶";
+    font-size: 0.65rem;
+    color: var(--muted);
+    transition: transform 0.2s ease;
+    display: inline-block;
+    width: 12px;
+  }
+
+  .folder.expanded::before {
+    transform: rotate(90deg);
+    color: var(--primary);
+  }
+
+  .folder:hover {
+    background: rgba(0,123,255,0.06);
+  }
+
+  /* Expanded folder header styling */
+  .folder.expanded {
+    font-weight: 800;
+    color: var(--primary);
+    background: rgba(0,123,255,0.04);
+  }
+
+  .folder .meta {
+    margin-left: auto;
+    color: var(--muted);
+    font-weight: 700;
+  }
+
+  /* Subtracks container - indented track list */
+  .subtracks {
+    padding: 4px 8px 8px 28px;
+    margin: 0;
+    background: rgba(0,123,255,0.02);
+    border-top: 1px solid rgba(0,123,255,0.1);
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+  }
 
   .track{padding:10px;border-radius:8px;margin:4px 0;display:flex;align-items:center;gap:8px;cursor:pointer;background:transparent;transition:background .12s, transform .08s}
   .track:hover{background:rgba(0,0,0,0.02);transform:translateY(-1px)}
@@ -462,8 +532,19 @@ async function scanPlaylists(useCacheIfAvailable = true){
             const full = normalizePath(dir + '/' + maybeName);
             addTrackToMap(newDirMap, full);
           } else if(maybeName && maybeName.includes('/')){
-            const last = maybeName.split('/').pop();
+            const parts = maybeName.split('/');
+            const last = parts.pop();
             if(isAudio(last)){
+              // Create intermediate directories
+              let currentPath = normalizedDir;
+              for(const part of parts){
+                const nextPath = normalizePath(currentPath + '/' + part);
+                if(!newDirMap.has(nextPath)) newDirMap.set(nextPath, { path: nextPath, name: part, files: [], dirs: new Set() });
+                const parentEntry = newDirMap.get(currentPath);
+                if(parentEntry) parentEntry.dirs.add(nextPath);
+                currentPath = nextPath;
+              }
+              // Add file to the deepest directory
               const full = normalizePath(dir + '/' + maybeName);
               addTrackToMap(newDirMap, full);
             }
@@ -476,8 +557,19 @@ async function scanPlaylists(useCacheIfAvailable = true){
           queue.push(child);
         } else {
           if(e.n && e.n.includes('/')){
-            const maybe = e.n.split('/').pop();
+            const parts = e.n.split('/');
+            const maybe = parts.pop();
             if(isAudio(maybe)){
+              // Create intermediate directories
+              let currentPath = normalizedDir;
+              for(const part of parts){
+                const nextPath = normalizePath(currentPath + '/' + part);
+                if(!newDirMap.has(nextPath)) newDirMap.set(nextPath, { path: nextPath, name: part, files: [], dirs: new Set() });
+                const parentEntry = newDirMap.get(currentPath);
+                if(parentEntry) parentEntry.dirs.add(nextPath);
+                currentPath = nextPath;
+              }
+              // Add file to the deepest directory
               const full = normalizePath(dir + '/' + e.n);
               addTrackToMap(newDirMap, full);
             }
@@ -519,8 +611,12 @@ function addTrackToMap(mapRef, fullPath){
   if(!isAudio(filename)) return;
   const dirPath = '/' + parts.slice(0, parts.length - 1).join('/');
   if(!mapRef.has(dirPath)) mapRef.set(dirPath, { path: dirPath, name: dirPath.split('/').filter(Boolean).pop() || '/', files: [], dirs: new Set() });
-  const t = { name: prettify(filename), file: filename, path: normalized, dirPath };
-  mapRef.get(dirPath).files.push(t);
+  const entry = mapRef.get(dirPath);
+  // Check if file already exists in this directory
+  if(!entry.files.some(f => f.path === normalized)){
+    const t = { name: prettify(filename), file: filename, path: normalized, dirPath };
+    entry.files.push(t);
+  }
 }
 
 function addTrackToMaps(fullPath){ addTrackToMap(directoryMap, fullPath); }
@@ -549,7 +645,7 @@ function gatherDirect(dirPath){
   dirPath = normalizePath(dirPath);
   const entry = directoryMap.get(dirPath);
   if(!entry || !entry.files) return [];
-  const arr = entry.files.slice();
+  const arr = entry.files.filter(f => f.dirPath === dirPath);
   arr.sort((a,b)=> sortAsc ? a.name.localeCompare(b.name, undefined, {numeric:true}) : b.name.localeCompare(a.name, undefined, {numeric:true}));
   return arr;
 }
@@ -630,7 +726,22 @@ function renderPlaylistBody(topPath, bodyEl){
       const childName = childPath.split('/').filter(Boolean).pop();
       const card = document.createElement('div'); card.className = 'folder-card'; card.dataset.path = childPath;
       const folderEl = document.createElement('div'); folderEl.className = 'folder'; folderEl.dataset.path = childPath;
-      folderEl.innerHTML = `<div class="name">${childName}</div><div class="meta">folder</div>`;
+      if(openSub === childPath){
+        folderEl.classList.add('expanded');
+        card.classList.add('expanded');
+      }
+
+      const nameDiv = document.createElement('div');
+      nameDiv.className = 'name';
+      nameDiv.textContent = childName;
+
+      const metaDiv = document.createElement('div');
+      metaDiv.className = 'meta';
+      metaDiv.textContent = `${childTracks.length} tracks`;
+
+      folderEl.appendChild(nameDiv);
+      folderEl.appendChild(metaDiv);
+
       card.appendChild(folderEl);
 
       folderEl.addEventListener('click', (ev)=> {
@@ -674,10 +785,13 @@ function renderPlaylistBody(topPath, bodyEl){
   // files directly under topPath (not recursive)
   const topFiles = topEntry.files || [];
   if(topFiles && topFiles.length){
+    const childPaths = new Set(children);
     const topDiv = document.createElement('div');
     const sorted = topFiles.slice().sort((a,b)=> sortAsc ? a.name.localeCompare(b.name, undefined, {numeric:true}) : b.name.localeCompare(a.name, undefined, {numeric:true}));
     sorted.forEach(t => {
       if(q && !t.name.toLowerCase().includes(q)) return;
+      // Only show if this file's directory is exactly topPath (not a subdirectory)
+      if(t.dirPath !== topPath) return;
       const tr = document.createElement('div'); tr.className = 'track'; tr.dataset.path = t.path;
       const tname = document.createElement('div'); tname.textContent = t.name;
       const meta = document.createElement('div'); meta.className = 'meta'; meta.textContent = '';
@@ -694,7 +808,7 @@ function renderPlaylistBody(topPath, bodyEl){
       });
       topDiv.appendChild(tr);
     });
-    bodyEl.appendChild(topDiv);
+    if(topDiv.children.length > 0) bodyEl.appendChild(topDiv);
   }
 
   if(bodyEl.children.length === 0){
@@ -1139,4 +1253,3 @@ async function bootstrap(){
 </script>
 </body>
 </html>
-
