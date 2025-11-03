@@ -5,7 +5,6 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Nomad — File Manager</title>
   <script>
-  // apply saved theme *before* CSS paints to avoid flash (mostly)
   try {
     // Theme management
     try {
@@ -72,7 +71,7 @@
       display: flex;
     }
 
-    /* Main container  */
+    /* Main container */
     .main-container {
       display: flex;
       flex: 1;
@@ -287,7 +286,7 @@
       border-color: var(--primary);
     }
 
-    /* Controls bar */
+    /* Controls bar (Back button + actions) */
     .controls-bar {
       display: flex;
       justify-content: space-between;
@@ -447,7 +446,7 @@
       padding: 2rem;
     }
 
-    /* Responsive */
+   
     @media (max-width: 768px) {
       .main-container {
         flex-direction: column;
@@ -499,9 +498,6 @@
           <button class="btn primary" id="btn-upload">Upload Files</button>
           <button class="btn" id="btn-new-folder">New Folder</button>
           <div class="path-display" id="current-path">/</div>
-          <div class="selected-info">
-            Selected: <span id="selected-name">None</span>
-          </div>
         </div>
         <div class="controls-right">
           <button class="btn" id="btn-download" disabled>Download</button>
@@ -509,19 +505,22 @@
           <button class="btn" id="btn-rename" disabled>Rename</button>
           <button class="btn danger" id="btn-delete" disabled>Delete</button>
         </div>
+        <div style="width: 100%; margin-top: 0.5rem;">
+          <div class="upload-progress" id="upload-progress">
+            <div></div>
+          </div>
+          <div class="selected-info">
+            Selected: <span id="selected-name">None</span>
+          </div>
+        </div>
       </div>
 
       <!-- File area -->
       <div class="file-area">
         <div class="status-line" id="status-line">Ready</div>
-        <div class="upload-progress" id="upload-progress">
-          <div></div>
-        </div>
         <ul class="file-list" id="root-items">
         </ul>
       </div>
-    </div>
-  </div>
 
   <!-- Hidden upload input -->
   <input type="file" id="upload-input" multiple style="display: none;">
@@ -541,7 +540,6 @@
     </div>
   </div>
 
-  <!-- jQuery  -->
   <script src="assets/jquery.min.js"></script>
 
   <script>
@@ -606,7 +604,7 @@
       $backButton.prop('disabled', navigationHistory.length < 2 && (typeof currentPath === 'undefined' || currentPath === '/'));
     }
 
-    // Attach a handler for a back button
+    // Attach a handler for a back button (if present in DOM)
     $(document).on('click', '#back-button', function (e) {
       e.preventDefault();
       goBack();
@@ -822,7 +820,7 @@
         console.warn('Index endpoint failed:', e);
       }
 
-      // 2) try nested endpoint (legacy)
+      // 2) legacy endpoint
       try {
         const res = await fetch(nestedIndexEndpoint + '?path=' + encodeURIComponent(path), { cache: 'no-store' });
         if (res.ok) {
@@ -1003,10 +1001,6 @@
           if (parts.length >= 1) {
             const name = parts[0];
             if (!name) continue;
-            // Determine directory status:
-            // - explicitly marked as directory
-            // - has nested path components
-            // - other entries indicate it has children
             const explicitlyDir = (e.t === 'd' || e.type === 'dir' || e.kind === 'dir') || String(e.n || '').endsWith('/');
             const hasNested = parts.length > 1;
             const isDir = explicitlyDir || hasNested || hasChildren;
@@ -1026,20 +1020,18 @@
         // For nested directories, only include items that are direct children
         // Normalize requestedPath (remove trailing slash) to avoid mismatches
         const normalizedRequested = requestedPath.endsWith('/') ? requestedPath.slice(0, -1) : requestedPath;
-        if (full !== normalizedRequested && !full.startsWith(normalizedRequested + '/')) continue;
+        const normalizedRequestedLower = normalizedRequested.toLowerCase();
+        if (full !== normalizedRequested && !full.toLowerCase().startsWith(normalizedRequestedLower + '/')) continue;
         const rel = full === normalizedRequested ? '' : full.slice(normalizedRequested.length + 1);
         if (rel === '') continue;
         const first = rel.split('/')[0];
         if (!first) continue;
-        // Check if this is a directory by:
-        // - having further path components
-        // - being explicitly marked as a directory
-        // - other entries indicating child items exist
         const explicitlyDir = (e.t === 'd' || e.type === 'dir' || e.kind === 'dir') || String(e.n || '').endsWith('/');
         const isDir = explicitlyDir || (rel.indexOf('/') !== -1) || hasChildren;
         const existing = map.get(first);
         if (!existing) {
           // Mark entries for directories so render/click handlers can
+          // optionally deselect items when navigating into directories.
           map.set(first, { n: first, t: isDir ? 'd' : 'f', deselectOnNavigate: !!isDir });
           try { console.log('normalizeIndexEntries added nested item:', { name: first, isDir, deselectOnNavigate: !!isDir }); } catch (_) {}
         } else if (isDir) {
@@ -1144,7 +1136,7 @@
           // Add to history before changing
           if (typeof addToHistory === 'function') addToHistory(path);
           if (path === currentPath) return;
-          // show loading indicator if available
+          // show loading indicator
           if (typeof setBusy === 'function') setBusy('Loading...');
           try {
             history.pushState({ path }, '', '#'+encodeURIComponent(path));
@@ -1197,7 +1189,7 @@
         }
       });
 
-      // Double click for files to open/download
+      // Double click for files to open/download (buggy)
       item.addEventListener('dblclick', () => {
         if (!isDir) {
           openOrDownload(path);
@@ -1222,7 +1214,7 @@
         return;
       }
       
-      // For media files, try to open in browser
+      // For media files, try to open in browser (Not how to do this, will revist with a range request handler prolly)
       if (/^(jpg|jpeg|png|gif|webp|bmp|mp4|webm|mp3|wav|ogg|pdf)$/.test(ext)) {
         window.open(path, '_blank');
         return;
@@ -1232,60 +1224,84 @@
       downloadFile(path);
     }
 
-    /* File operations */
+    // Replace your existing uploadFiles(...) with this implementation
     async function uploadFiles(files, targetDir) {
       if (!files || files.length === 0) return;
-
-      targetDir = norm(targetDir || currentPath);
-      setBusy(`Uploading ${files.length} file(s)...`);
-
+    
+      // Normalize / compute target directory
+      targetDir = (typeof targetDir === 'string' && targetDir) ? norm(targetDir) : norm(currentPath || '/');
+    
+      // Prepare two flavors: no-leading-slash (dir) and absolute (path)
+      const dirNoLead = (targetDir === '/' ? '' : (targetDir.startsWith('/') ? targetDir.slice(1) : targetDir));
+      const dirAbs = targetDir;
+    
+      setBusy(`Uploading ${files.length} file(s) to ${targetDir}...`);
+      $uploadBar.css('width', '0%');
+      $uploadProgress.show();
+    
       try {
         for (let i = 0; i < files.length; i++) {
           const file = files[i];
+    
+          // IMPORTANT: append directory/form fields FIRST so the server sees them before the file part
           const formData = new FormData();
-          formData.append('file', file);
-          formData.append('dir', targetDir);
+          // append the single field your backend requires ('dir') first (no leading slash is fine)
+          formData.append('dir', dirNoLead || '/'.replace('/', '')); // if root, send empty or "/"? send empty string yields "/" at server
+          // also send absolute path under other field names for compatibility if desired
+          formData.append('dir_abs', dirAbs);
+          formData.append('path', dirAbs);
+          formData.append('destination', dirAbs);
           formData.append('overwrite', '1');
-
+    
+          // now append the file LAST — so the server gets form fields before file part
+          formData.append('file', file, file.name);
+    
+          // Create XHR to track progress
           const xhr = new XMLHttpRequest();
           xhr.open('POST', uploadEndpoint, true);
           xhr.timeout = UPLOAD_TIMEOUT;
-
+    
           await new Promise((resolve, reject) => {
             xhr.upload.onprogress = function(e) {
               if (e.lengthComputable) {
                 const pct = Math.round(e.loaded / e.total * 100);
-                $uploadProgress.show();
                 $uploadBar.css('width', pct + '%');
                 $statusLine.text(`Uploading ${file.name}: ${pct}%`);
               }
             };
-
+    
             xhr.onload = function() {
-              $uploadProgress.hide();
-              if (xhr.status === 200) {
+              if (xhr.status === 200 || xhr.status === 201 || xhr.status === 204) {
                 resolve();
               } else {
-                reject(new Error(`Upload failed: ${xhr.status} ${xhr.statusText}`));
+                const serverMsg = (xhr.responseText && xhr.responseText.length < 2000) ? ' - ' + xhr.responseText : '';
+                reject(new Error(`Upload failed: ${xhr.status} ${xhr.statusText}${serverMsg}`));
               }
             };
-
-            xhr.onerror = () => reject(new Error('Upload failed'));
+    
+            xhr.onerror = () => reject(new Error('Upload failed (network)'));
             xhr.ontimeout = () => reject(new Error('Upload timeout'));
             xhr.send(formData);
           });
         }
-
-        // Trigger reindex and refresh
+    
+        $uploadProgress.hide();
+        $uploadBar.css('width', '0%');
         triggerReindex(targetDir);
-        await sleep(1000);
+        await sleep(800);
         clearBusy('Upload completed');
         renderDirectory(targetDir);
-
-      } catch (e) {
-        clearBusy('Upload failed');
-        alert('Upload failed: ' + (e.message || e));
+    
+      } catch (err) {
         $uploadProgress.hide();
+        $uploadBar.css('width', '0%');
+        clearBusy('Upload failed');
+        console.error('uploadFiles error:', err);
+        alert('Upload failed: ' + (err && err.message ? err.message : String(err)));
+        $statusLine.text('Upload failed');
+      } finally {
+        // Reset file input so re-selecting the same file triggers change
+        try { $uploadInput.val(''); } catch (_) {}
       }
     }
 
@@ -1407,28 +1423,7 @@
       setBusy('Saving...');
 
       try {
-        const formData = new FormData();
-        formData.append('file', new Blob([content], { type: 'text/plain; charset=UTF-8' }), basename(rel));
-        formData.append('dir', parent);
-        formData.append('filename', basename(rel));
-        formData.append('overwrite', '1');
-
-        const xhr = new XMLHttpRequest();
-        xhr.open('POST', uploadEndpoint, true);
-        xhr.timeout = 120000;
-
-        await new Promise((resolve, reject) => {
-          xhr.onload = function() {
-            if (xhr.status === 200) {
-              resolve();
-            } else {
-              reject(new Error(`Save failed: ${xhr.status} ${xhr.statusText}`));
-            }
-          };
-          xhr.onerror = () => reject(new Error('Save failed'));
-          xhr.ontimeout = () => reject(new Error('Save timeout'));
-          xhr.send(formData);
-        });
+        await ajaxPost(saveEndpoint, { filename: rel, content: content }, 120000);
 
         triggerReindex(parent);
         clearBusy('Saved');
@@ -1455,10 +1450,118 @@
       const path = $(this).data('path');
       if (typeof navigateToDirectory === 'function') navigateToDirectory(path);
     });
-
     // Ensure clean bindings and attach handlers once
-    $btnUpload.off('click').on('click', () => $uploadInput.click());
-    $uploadInput.off('change').on('change', (e) => uploadFiles(e.target.files, currentPath));
+    
+    // helper: dirname similar to path.dirname
+    function dirname(path) {
+      if (!path) return '/';
+      // remove trailing slash except for root
+      path = String(path);
+      if (path.length > 1 && path.endsWith('/')) path = path.slice(0, -1);
+      const idx = path.lastIndexOf('/');
+      if (idx <= 0) return '/';
+      return path.slice(0, idx) || '/';
+    }
+    
+    // helper: safe normalize - use existing norm() if present, otherwise simple normalizer
+    function safeNormalize(p) {
+      if (typeof norm === 'function') return norm(p || '/');
+      // fallback normalization: ensure leading slash and no trailing (unless root)
+      if (!p) return '/';
+      p = String(p).trim();
+      if (!p.startsWith('/')) p = '/' + p;
+      if (p.length > 1 && p.endsWith('/')) p = p.slice(0, -1);
+      return p || '/';
+    }
+    
+    // Try to extract a path from toolbar/selected-info element(s)
+    // Tries a few common selectors and sanitizes the text into a path
+    function readToolbarSelectedInfo() {
+      const selectors = [
+        '#selected-info',         // you mentioned "selected info"
+        '.selected-info',
+        '#toolbar .selected-info',
+        '#toolbar .path',
+        '#cwd',                   // common id for current working dir
+        '.cwd',
+        '#current-path',
+        '.current-path'
+      ];
+    
+      for (const sel of selectors) {
+        const el = document.querySelector(sel);
+        if (!el) continue;
+        let txt = (el.textContent || el.innerText || '').trim();
+        if (!txt) continue;
+    
+        // Some toolbar text might be like "Selected: /Music/Artist/Album" or "Path: /Movies"
+        // Try to extract a path-like substring using a regex
+        const match = txt.match(/(\/[^\s]*)/); // first slash + non-space chunk
+        if (match && match[1]) return safeNormalize(match[1]);
+    
+        // If the whole text looks like a path, return it
+        if (txt.startsWith('/')) return safeNormalize(txt);
+    
+        // fallback: if it looks like "Music/Artist/..." without leading slash
+        if (txt.includes('/') && !txt.includes(' ')) return safeNormalize('/' + txt);
+      }
+    
+      return null;
+    }
+    
+    // Determine the best upload target at the moment of action
+    function getUploadTarget() {
+      // 1) If a selection exists in the UI and is a file -> use its parent dir
+      try {
+        if (typeof selectedPath === 'string' && selectedPath) {
+          if (selectedIsDir) {
+            return safeNormalize(selectedPath);
+          } else {
+            return safeNormalize(dirname(selectedPath));
+          }
+        }
+      } catch (err) {
+        // ignore and continue to toolbar detection
+        console.debug('getUploadTarget: selectedPath check failed', err);
+      }
+    
+      // 2) Try toolbar "selected info" indicator
+      try {
+        const tb = readToolbarSelectedInfo();
+        if (tb) return tb;
+      } catch (err) {
+        console.debug('getUploadTarget: toolbar read failed', err);
+      }
+    
+      // 3) fallback to currentPath if present
+      try {
+        if (typeof currentPath === 'string' && currentPath) return safeNormalize(currentPath);
+      } catch (err) {
+        // ignore
+      }
+    
+      // 4) absolute fallback root
+      return '/';
+    }
+    
+    // --- Upload button / input wiring (use getUploadTarget) ---
+    // When opening the file picker, record the best target at click time
+    $btnUpload.off('click').on('click', () => {
+      const target = getUploadTarget();
+      $uploadInput.data('targetDir', target);
+      $uploadInput.click();
+    });
+    
+    // When the file input changes, use the recorded 'targetDir' (fallback to getUploadTarget())
+    $uploadInput.off('change').on('change', (e) => {
+      const files = e.target && e.target.files ? e.target.files : null;
+      let recorded = $uploadInput.data('targetDir');
+      if (!recorded || typeof recorded !== 'string') {
+        recorded = getUploadTarget();
+      }
+      uploadFiles(files, recorded);
+    });
+    
     $btnNewFolder.off('click').on('click', createFolder);
     $btnRename.off('click').on('click', renameItem);
     $btnDelete.off('click').on('click', deleteItem);
@@ -1468,7 +1571,7 @@
     $btnEdit.off('click').on('click', () => {
       if (selectedPath && !selectedIsDir) openEditor(selectedPath);
     });
-
+    
     $('#editor-cancel').off('click').on('click', () => $editorModal.hide().attr('aria-hidden', 'true'));
     $('#editor-save').off('click').on('click', saveEditor);
     $('#editor-download').off('click').on('click', () => {
@@ -1483,7 +1586,8 @@
       a.remove();
       URL.revokeObjectURL(url);
     });
-
+    
+    // keyboard shortcuts and global keys
     $(document).off('keydown.filebrowser').on('keydown.filebrowser', function(e) {
       if (e.key === 'Escape' && $editorModal.is(':visible')) {
         $editorModal.hide().attr('aria-hidden', 'true');
@@ -1500,8 +1604,9 @@
         renameItem();
       }
     });
-
-    // Single drag/drop handler
+    
+    // Single drag/drop handler (consolidated)
+    // Compute upload target at drop time using the same resolution logic
     $(document).off('dragover.filebrowser drop.filebrowser')
       .on('dragover.filebrowser', (e) => { e.preventDefault(); e.stopPropagation(); })
       .on('drop.filebrowser', (e) => {
@@ -1509,11 +1614,14 @@
         e.stopPropagation();
         const files = e.originalEvent && e.originalEvent.dataTransfer && e.originalEvent.dataTransfer.files;
         if (files && files.length > 0) {
-          uploadFiles(files, currentPath);
+          const dropTarget = getUploadTarget();
+          uploadFiles(files, dropTarget);
         }
       });
 
-    /* Theme management  */
+
+
+    /* Theme management */
     function _filebrowser_applyThemeFlag(dark) {
       try {
         document.body.classList.toggle('dark', !!dark);
