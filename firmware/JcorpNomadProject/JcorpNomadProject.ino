@@ -1,4 +1,4 @@
-//Jcorp Nomad Project ver3
+//Jcorp Nomad Project ver3.1
 #include <Arduino.h>
 #define FF_USE_FASTSEEK 1
 #define SD_FREQ_KHZ 40000
@@ -17,7 +17,6 @@
 #include <SPIFFS.h>
 #include <Preferences.h>
 #include "esp_wifi.h"
-#include <esp_task_wdt.h>  // Add watchdog include
 #if defined(ARDUINO_ARCH_ESP32)
   #include "soc/soc.h"
   #include "soc/rtc_cntl_reg.h"
@@ -122,6 +121,10 @@ volatile bool mediaStreamingActive = false; // Flag to indicate active media str
 static bool sdScanned = false;
 const uint32_t SD_SCAN_DELAY = 5000;  // milliseconds after boot
 SemaphoreHandle_t sdMutex = NULL; 
+static uint64_t cachedTotalBytes = 0;
+static uint64_t cachedUsedBytes = 0;
+const char* SD_USAGE_FILE = "/.system-index/sd_usage.json";
+static unsigned long lastScanTime = 0;
 volatile bool sdbarDirty = false;
 volatile int activeStreams = 0;
 struct IndexBuildArgs {
@@ -135,6 +138,7 @@ TaskHandle_t indexWorkerTaskHandle = nullptr;
 TaskHandle_t storageMonitorTaskHandle = nullptr;
 volatile bool shutdownBackgroundTasks = false;
 volatile bool indexingTasksActive = false;
+volatile bool firstTimeIndexBuild = false;  // Track if this is initial index creation
 
 // Function declarations for task management
 void shutdownBackgroundTasksForStreaming();
@@ -146,6 +150,16 @@ void triggerIndexingIfNeeded(const String& filePath);
 unsigned long lastSdbarUpdate = 0;
 void updateSDBAR() {
   sdbarDirty = true;
+}
+void updateSDBAR_UI_ThreadOnly() {
+  if (cachedTotalBytes == 0) return;
+  
+  int usage = (int)((cachedUsedBytes * 100) / cachedTotalBytes);
+  if (usage > 100) usage = 100;
+  if (usage < 0) usage = 0;
+  
+  lv_bar_set_value(ui_sdbar, usage, LV_ANIM_OFF);
+  sdbarDirty = false;
 }
 #include <string> // used by std::map key
 static std::map<std::string, unsigned long> lastIndexRequestMs;
@@ -982,10 +996,6 @@ bool lastWifiStatus = false;
 bool lastSDStatus = false;
 //Globals for SD scan
 unsigned long lastUpdateTime = 0;
-uint64_t cachedUsedBytes = 0;
-uint64_t cachedTotalBytes = 0;
-unsigned long lastScanTime = 0;
-
 volatile bool requestIndexing = false;     // set by admin endpoint; consumed by index worker
 volatile bool indexingInProgress = false;  // guard so we never run multiple index runs concurrently
 volatile bool settingsReady = false;       // set to true after loadSettings() runs
@@ -994,7 +1004,7 @@ volatile bool settingsReady = false;       // set to true after loadSettings() r
 volatile bool sdScanInProgress = false;    // true while SD scan is performing its initial pass
 volatile bool sdScanCompleted = false;     // set to true after the initial SD scan completes
 
-volatile bool bootIndexAllowed = false;    // set by boot coordinator once it's OK for index to run
+volatile bool bootIndexAllowed = true;   
 
 unsigned long lastSDScanTime = 0;
 const unsigned long SD_SCAN_INTERVAL = 60000; // 60 seconds
@@ -1469,16 +1479,25 @@ void handleRangeRequest(AsyncWebServerRequest *request) {
     }
   }
 
+  // Use original pattern: capture file by value, let ESP32 File handle manage state
+  // The File copy constructor handles the reference properly for SD_MMC
   AsyncWebServerResponse *response = request->beginResponse(
     mimeType,
     contentLength,
-    [file, startByte, endByte, contentLength](uint8_t *buffer, size_t maxLen, size_t index) mutable -> size_t {
+    [file, startByte, contentLength](uint8_t *buffer, size_t maxLen, size_t index) mutable -> size_t {
+      // On first call, seek to start position
       if (index == 0) {
         file.seek(startByte);
       }
       
       size_t remaining = contentLength - index;
       size_t bytesToRead = min(maxLen, remaining);
+      
+      if (bytesToRead == 0) {
+        file.close();
+        return 0;
+      }
+      
       size_t bytesRead = file.read(buffer, bytesToRead);
 
       if (bytesRead == 0) {
@@ -1487,9 +1506,11 @@ void handleRangeRequest(AsyncWebServerRequest *request) {
         return 0;
       }
 
+      // Close file when done
       if (index + bytesRead >= contentLength) {
         file.close();
       }
+      
       return bytesRead;
     }
   );
@@ -1877,10 +1898,8 @@ void createSimpleUploadHandler(const String& mediaFolder, const char* endpoint) 
 }
 // ---------- SD usage persistence helpers ----------
 // File used to persist the last known usage %
-static const char *SD_USAGE_FILE = "/.sdusage";
 // Save usage atomically
 void saveSdUsageToFile(uint64_t totalBytes, uint64_t usedBytes, unsigned long tsMillis = 0) {
-  // write JSON snapshot to tmp then rename (atomic-ish)
   DynamicJsonDocument doc(256);
   doc["total"] = totalBytes;
   doc["used"]  = usedBytes;
@@ -1919,9 +1938,8 @@ void saveSdUsageToFile(uint64_t totalBytes, uint64_t usedBytes, unsigned long ts
     }
   }
 
-  // Throttled serial reporting: only print once every 10s 
   static unsigned long lastSaveLogMs = 0;
-  if (millis() - lastSaveLogMs >= 10000) { // 10s
+  if (millis() - lastSaveLogMs >= 10000) {
     lastSaveLogMs = millis();
     float pct = 0.0f;
     if (totalBytes > 0) pct = (float)usedBytes * 100.0f / (float)totalBytes;
@@ -1930,7 +1948,6 @@ void saveSdUsageToFile(uint64_t totalBytes, uint64_t usedBytes, unsigned long ts
   }
 }
 
-// Return true if loaded; values placed into cachedTotalBytes/cachedUsedBytes/lastScanTime
 bool loadSdUsageFromFile() {
   if (!SD_MMC.exists(SD_USAGE_FILE)) return false;
   File f = SD_MMC.open(SD_USAGE_FILE, FILE_READ);
@@ -1946,14 +1963,12 @@ bool loadSdUsageFromFile() {
   }
   uint64_t t = (uint64_t)(doc["total"] | 0ULL);
   uint64_t u = (uint64_t)(doc["used"]  | 0ULL);
-  unsigned long ts = (unsigned long)(doc["ts"] | 0UL);
 
-  // Only accept plausibly non-zero values
   if (t == 0) return false;
   cachedTotalBytes = t;
   cachedUsedBytes  = u;
-  lastScanTime     = ts;
-  Serial.printf("[SDBAR] Loaded saved usage: total=%llu used=%llu (ts=%lu)\n", (unsigned long long)cachedTotalBytes, (unsigned long long)cachedUsedBytes, lastScanTime);
+  lastScanTime     = 0;
+  Serial.printf("[SDBAR] Loaded saved usage: total=%llu used=%llu\n", (unsigned long long)cachedTotalBytes, (unsigned long long)cachedUsedBytes);
   return true;
 }
 
@@ -1969,17 +1984,15 @@ void scanSDCardUsage() {
     if (sdMutex) xSemaphoreGive(sdMutex);
   };
 
-  // Throttle scans: avoid running too frequently to reduce CPU / SD wear
-  const unsigned long minScanIntervalMs = 15UL * 60UL * 1000UL; // 15 minutes
+  const unsigned long minScanIntervalMs = 15UL * 60UL * 1000UL;
   if (lastScanTime != 0 && (millis() - lastScanTime) < minScanIntervalMs) {
     Serial.printf("[SDBAR] scan skipped: last scan %lu ms ago (min %lu ms)\n", millis() - lastScanTime, minScanIntervalMs);
     releaseSdScan();
     return;
   }
 
-  // Initialize
   cachedUsedBytes  = 0;
-  uint64_t reportedTotal = SD_MMC.cardSize(); // library-dependent units
+  uint64_t reportedTotal = SD_MMC.cardSize();
   uint32_t startMs = millis();
   uint64_t lastSavedBytes = 0;
 
@@ -1990,7 +2003,6 @@ void scanSDCardUsage() {
       } else if ((reportedTotal * 1024ULL) >= cachedUsedBytes) {
         reportedTotal *= 1024ULL;
       } else {
-        // make a best-effort conversion (most SD implementations use 512B blocks)
         reportedTotal *= 512ULL;
       }
     }
@@ -2003,57 +2015,62 @@ void scanSDCardUsage() {
   uint32_t lastYield = millis();
   uint64_t lastAnnounced = 0;
 
-  // recursive lambda to sum a directory
-  std::function<void(File)> sumDirectory = [&](File dir) {
+  std::vector<String> dirStack;
+  dirStack.push_back("/");
+
+  while (!dirStack.empty()) {
+    String currentPath = dirStack.back();
+    dirStack.pop_back();
+
+    File dir = SD_MMC.open(currentPath);
+    if (!dir || !dir.isDirectory()) {
+      if (dir) dir.close();
+      continue;
+    }
+
     while (true) {
       File entry = dir.openNextFile();
       if (!entry) break;
 
+      String entryPath = String(entry.path());
+      
       if (entry.isDirectory()) {
-        sumDirectory(entry);
+        dirStack.push_back(entryPath);
+        entry.close();
       } else {
-        cachedUsedBytes += entry.size();
-        // every few MB, poke UI and maybe persist snapshot
+        uint64_t fileSize = entry.size();
+        entry.close();
+        
+        cachedUsedBytes += fileSize;
+        
         if ((cachedUsedBytes - lastAnnounced) > (8ULL * 1024ULL * 1024ULL)) {
           sdbarDirty = true;
           lastAnnounced = cachedUsedBytes;
         }
-        // persist intermediate results every ~32MB progress
+        
         if ((cachedUsedBytes - lastSavedBytes) > (32ULL * 1024ULL * 1024ULL)) {
           saveSdUsageToFile(cachedTotalBytes, cachedUsedBytes, millis());
           lastSavedBytes = cachedUsedBytes;
         }
       }
-      entry.close();
 
-      // keep system responsive by yielding
       if ((millis() - lastYield) > tickBudgetMs) {
         lastYield = millis();
-        // Short delay allows other tasks to run and prevents watchdog hits
         taskYIELD();
       }
     }
-  };
-
-  // Start walk
-  File root = SD_MMC.open("/");
-  if (root && root.isDirectory()) {
-    sumDirectory(root);
-    root.close();
+    dir.close();
   }
 
-  // final save
   saveSdUsageToFile(cachedTotalBytes, cachedUsedBytes, millis());
 
   lastScanTime = millis();
-  sdbarDirty = true; // request UI thread to refresh
+  sdbarDirty = true;
 
-  // release mutex
   releaseSdScan();
   Serial.printf("[SDBAR] SD card scan complete: used=%llu bytes, total=%llu bytes, duration=%u ms\n",
     (unsigned long long)cachedUsedBytes, (unsigned long long)cachedTotalBytes, (unsigned) (millis() - startMs));
 
-  // Add web logging for user-friendly info
   float usedMB = (float)cachedUsedBytes / (1024.0 * 1024.0);
   float totalMB = (float)cachedTotalBytes / (1024.0 * 1024.0);
   float usedGB = usedMB / 1024.0;
@@ -2063,8 +2080,6 @@ void scanSDCardUsage() {
   webLogf("success", "SD card scan complete: %.1f GB used of %.1f GB total (%.1f%% full)",
     usedGB, totalGB, percent);
 }
-
-
 void handleSDInfo(AsyncWebServerRequest *request) {
     DynamicJsonDocument doc(256);
 
@@ -2088,13 +2103,6 @@ static inline int calcUsagePct(uint64_t used, uint64_t total) {
   if (total == 0) return 0;
   uint64_t pct = (used * 100ULL) / total;
   return (int)(pct > 100 ? 100 : pct);
-}
-
-static void updateSDBAR_UI_ThreadOnly() {
-  // LVGL must be touched from the UI thread/task 
-  int pct = calcUsagePct(cachedUsedBytes, cachedTotalBytes);
-  lv_bar_set_value(ui_sdbar, pct, LV_ANIM_OFF);
-  sdbarDirty = false;
 }
 
 bool checkGenerateFlagFile() {
@@ -2197,24 +2205,23 @@ int getConnectedUserCount() {
   return WiFi.softAPgetStationNum();
 }
 void sdScanTask(void* pvParameters) {
-  webLog("[SDScan] Starting background SD card scan", "info");
+  Serial.println("[SDScan] sdScanTask starting (background)");
+  
   sdScanInProgress = true;
   sdScanCompleted = false;
 
-  // Run the single full scan 
+  // Run the full recursive scan (this actually walks the SD card and sums file sizes)
   scanSDCardUsage();      // updates cachedUsedBytes/Total
   sdbarDirty = true;      // request UI thread to refresh
 
   // Mark initial pass complete so indexer can run
   sdScanInProgress = false;
   sdScanCompleted = true;
-  webLog("[SDScan] SD card scan completed successfully", "success");
-
+  Serial.println("[SDScan] initial SD scan complete; sdScanCompleted = true");
+  
+  // Task deletes itself when done
   vTaskDelete(NULL);
 }
-
-
-
 void generateMediaJSON(){ generateMediaJson(); }
 
 // --- converts “how busy” into small work budgets and pauses.
@@ -2263,14 +2270,11 @@ void triggerIndexingIfNeeded(const String& filePath) {
 void indexWorkerTask(void *param) {
   const char *buckets[] = { "/Shows", "/Music", "/Movies", "/Books", "/Gallery", "/Files",  "/", NULL };
 
-  // Wait until settings have been loaded so we can honor autoGenerateMedia
   while (!settingsReady) {
     vTaskDelay(pdMS_TO_TICKS(50));
   }
 
-  // ---- Event-driven loop: only process when explicitly requested ----
   for (;;) {
-    // Check if we should shut down to free resources for media streaming
     if (shutdownBackgroundTasks && !indexingInProgress) {
       Serial.println("[IndexWorker] Shutting down to prioritize media streaming");
       indexWorkerTaskHandle = nullptr;
@@ -2279,15 +2283,36 @@ void indexWorkerTask(void *param) {
       return;
     }
 
-    // Only process when a full boot-like index was requested
     if (requestIndexing && !indexingInProgress) {
+      // MEMORY CLEANUP: Free up as much memory as possible before indexing
+      Serial.printf("[IndexWorker] Pre-index heap check: free=%u\n", ESP.getFreeHeap());
+      
+      // Force garbage collection of any lingering allocations
+      vTaskDelay(pdMS_TO_TICKS(100));
+      
+      if (!enoughHeapForIndex(30000)) {  // Reduced requirement from 40000
+        Serial.println("[IndexWorker] Insufficient heap for indexing, clearing caches and retrying");
+        
+        // Clear any cached data structures
+        g_lastIndexSkipLog.clear();
+        lastIndexRequestMs.clear();
+        
+        vTaskDelay(pdMS_TO_TICKS(2000)); 
+        
+        if (!enoughHeapForIndex(30000)) {
+          Serial.printf("[IndexWorker] Still insufficient heap after cleanup (free=%u), deferring\n", ESP.getFreeHeap());
+          vTaskDelay(pdMS_TO_TICKS(5000));
+          continue;
+        }
+      }
+      
+      Serial.printf("[IndexWorker] Starting index with heap: free=%u\n", ESP.getFreeHeap());
       webLog("[IndexWorker] Index request detected - starting full media scan", "info");
       indexingInProgress = true;
       indexingTasksActive = true;
       requestIndexing = false;
 
       for (int i = 0; buckets[i]; ++i) {
-        // Check for shutdown request during processing
         if (shutdownBackgroundTasks) {
           indexingInProgress = false;
           indexingTasksActive = false;
@@ -2298,47 +2323,80 @@ void indexWorkerTask(void *param) {
         const String bucket = String(buckets[i]);
         auto [batch, pauseMs] = chooseWorkBudget();
 
-        Serial.printf("[IndexWorker] (queued) update bucket=%s (batch=%d pause=%dms)\n",
-                      bucket.c_str(), batch, pauseMs);
+        Serial.printf("[IndexWorker] Processing bucket=%s (batch=%d pause=%dms, heap=%u)\n",
+                      bucket.c_str(), batch, pauseMs, ESP.getFreeHeap());
 
         buildBucketIndex(bucket);
+        
+        // MEMORY CLEANUP: Clear temporary maps after each bucket
+        g_lastIndexSkipLog.clear();
+        
         vTaskDelay(pdMS_TO_TICKS(pauseMs));
 
+        // Process queued items after each bucket
         IndexBuildArgs *msg = nullptr;
-        while (indexQueue && xQueueReceive(indexQueue, &msg, 0) == pdTRUE && msg) {
-          // Check for shutdown during queue processing
+        int processedCount = 0;
+        while (indexQueue && xQueueReceive(indexQueue, &msg, 0) == pdTRUE && msg && processedCount < 5) {
           if (shutdownBackgroundTasks) {
             delete msg;
             break;
           }
+          
+          Serial.printf("[IndexWorker] Processing queued item (heap=%u)\n", ESP.getFreeHeap());
           writeNDIndexForDir(msg->dir, msg->out);
           delete msg;
+          processedCount++;
+          
+          // MEMORY CLEANUP: Yield and clear after each queued item
+          g_lastIndexSkipLog.clear();
           vTaskDelay(pdMS_TO_TICKS(pauseMs));
         }
       }
 
-      // mark boot done on success (if not interrupted)
       if (!shutdownBackgroundTasks) {
         File f = SD_MMC.open("/boot_done.flag", FILE_WRITE);
         if (f) { f.print("1"); f.close(); }
 
-        // Update LVGL screen to show completion
-        lv_textarea_set_text(ui_MediaGen, "Filesystem update complete!\nReady for use");
-        lv_timer_handler(); // Force screen update
-        Serial.println("[IndexWorker] LVGL screen updated with completion message");
+        if (firstTimeIndexBuild) {
+          // First-time index build complete - show message and reboot
+          lv_obj_clear_flag(ui_MediaGen, LV_OBJ_FLAG_HIDDEN);
+          lv_textarea_set_text(ui_MediaGen, "First-time index build complete!\n\nRebooting in 5 seconds...");
+          lv_timer_handler();
+          Serial.println("[IndexWorker] First-time index complete - rebooting in 5 seconds");
+          
+          webLog("[IndexWorker] First-time setup completed - rebooting", "success");
+          
+          vTaskDelay(pdMS_TO_TICKS(5000));
+          Serial.println("[IndexWorker] Rebooting now...");
+          ESP.restart();
+        } else {
+          // Regular index update - show completion and trigger storage scan
+          lv_textarea_set_text(ui_MediaGen, "Filesystem update complete!\nUpdating storage info...");
+          lv_timer_handler();
+          Serial.println("[IndexWorker] Index complete, triggering storage scan");
 
-        webLog("[IndexWorker] Full media scan completed successfully", "success");
+          // NOW spawn storage scan AFTER indexing is complete
+          BaseType_t r = xTaskCreatePinnedToCore(sdScanTask, "SDScanPost", 20 * 1024, NULL, 1, NULL, 1);
+          if (r == pdPASS) {
+            Serial.println("[IndexWorker] Post-index storage scan spawned");
+          }
+
+          webLog("[IndexWorker] Full media scan completed successfully", "success");
+        }
       }
-
       indexingInProgress = false;
       indexingTasksActive = false;
-      continue; // check queue again
+      
+      // MEMORY CLEANUP: Final cleanup after full indexing
+      lastIndexRequestMs.clear();
+      g_lastIndexSkipLog.clear();
+      
+      continue;
     }
 
-    // Check for specific directory tasks
+    // Process queued index requests (live updates)
     IndexBuildArgs *msg = nullptr;
     if (indexQueue && xQueueReceive(indexQueue, &msg, pdMS_TO_TICKS(100)) == pdTRUE && msg) {
-      // Check for shutdown before processing
       if (shutdownBackgroundTasks) {
         delete msg;
         Serial.println("[IndexWorker] Shutting down, discarding queued index request");
@@ -2348,8 +2406,27 @@ void indexWorkerTask(void *param) {
         return;
       }
 
+      // Check heap before processing - reduced threshold for live updates
+      if (!enoughHeapForIndex(25000)) {  // Lower threshold for single directory
+        Serial.printf("[IndexWorker] Low heap (%u bytes), re-queuing %s\n", 
+                     ESP.getFreeHeap(), msg->dir.c_str());
+        
+        // MEMORY CLEANUP: Try clearing caches before re-queuing
+        g_lastIndexSkipLog.clear();
+        vTaskDelay(pdMS_TO_TICKS(1000));
+        
+        // Try to re-queue for later
+        if (xQueueSend(indexQueue, &msg, 0) != pdTRUE) {
+          // Queue full, drop the request
+          delete msg;
+        }
+        vTaskDelay(pdMS_TO_TICKS(3000));
+        continue;
+      }
+
       indexingTasksActive = true;
-      Serial.printf("[IndexWorker] Processing queued index request for '%s' -> %s\n", msg->dir.c_str(), msg->out.c_str());
+      Serial.printf("[IndexWorker] Processing queued index request for '%s' -> %s (heap=%u)\n", 
+                   msg->dir.c_str(), msg->out.c_str(), ESP.getFreeHeap());
 
       String bucketName = msg->dir;
       if (bucketName == "/") bucketName = "Root Directory";
@@ -2358,19 +2435,17 @@ void indexWorkerTask(void *param) {
       webLogf("info", "Processing index request for %s", bucketName.c_str());
       writeNDIndexForDir(msg->dir, msg->out);
       delete msg;
+      
+      // MEMORY CLEANUP: Clear after each live update
+      g_lastIndexSkipLog.clear();
+      
       indexingTasksActive = false;
-      // after a queued build, loop again 
     } else {
-      // No work to do - sleep longer to reduce CPU usage
       int sleepMs = mediaStreamingActive ? 2000 : 500;
       vTaskDelay(pdMS_TO_TICKS(sleepMs));
     }
   }
 }
-
-
-
-
 // Helper: is this request for a top-level bucket root? ("/", "/Shows", "/Music", "/Movies", "/Books", "/Gallery", "/Files")
 static inline bool isBucketRootPath(const String &p) {
   if (p == "/") return true;
@@ -2379,8 +2454,8 @@ static inline bool isBucketRootPath(const String &p) {
   int nextSlash = p.indexOf('/', 1);
   return (nextSlash < 0);
 }
+
 void enqueueIndexUpdateForPath(const String &path) {
-  // For subdirectories of /Music or /Shows, redirect to bucket root BEFORE coalescing
   String targetPath = path;
   if (path.startsWith("/Music/")) {
     targetPath = "/Music";
@@ -2390,13 +2465,13 @@ void enqueueIndexUpdateForPath(const String &path) {
     Serial.printf("[Index] Redirecting '%s' -> '%s' (Shows bucket)\n", path.c_str(), targetPath.c_str());
   }
 
-  // Coalesce quickly repeated requests for the TARGET path (after redirection)
+  // Coalesce quickly repeated requests
   if (!shouldCoalesceIndexRequest(targetPath)) {
     Serial.printf("[Index] Coalesced duplicate index request for '%s'\n", targetPath.c_str());
     return;
   }
 
-  // Decide target index file from path (bucket or nested)
+  // Decide target index file from path
   String out;
   if (isBucketRootPath(targetPath)) {
     String bucket = targetPath == "/" ? "root" : targetPath.substring(1);
@@ -2405,26 +2480,27 @@ void enqueueIndexUpdateForPath(const String &path) {
     out = encodeIndexName(targetPath) + ".nested.ndjson";
   }
 
-  // Allocate message and push pointer onto queue
+  // Check if queue already has this request (scan existing queue)
+  // This prevents filling the queue with duplicates
+  static std::map<std::string, unsigned long> queuedPaths;
+  std::string key(targetPath.c_str());
+  unsigned long now = millis();
+  auto it = queuedPaths.find(key);
+  if (it != queuedPaths.end() && (now - it->second) < 10000) { // 10 seconds
+    Serial.printf("[Index] Request already queued for '%s', skipping duplicate\n", targetPath.c_str());
+    return;
+  }
+  queuedPaths[key] = now;
+
   IndexBuildArgs *msg = new IndexBuildArgs{ targetPath, out };
 
-  // Try to enqueue quickly (short timeout)
   if (indexQueue && xQueueSend(indexQueue, &msg, pdMS_TO_TICKS(10)) == pdTRUE) {
-    // enqueued — good
     Serial.printf("[Index] Enqueued index update for '%s' -> %s\n", targetPath.c_str(), out.c_str());
     return;
   }
 
-  // If queue doesn't exist or is full, attempt inline build as a fallback
-  if (enoughHeapForIndex()) {
-    Serial.printf("[Index] Queue unavailable; running inline index for '%s'\n", targetPath.c_str());
-    writeNDIndexForDir(targetPath, out);
-    delete msg;
-    return;
-  }
-
-  // Low-memory / queue-full: log and drop (coalesce will prevent spam).
-  Serial.printf("[Index] Queue full & low memory; unable to index '%s' now\n", targetPath.c_str());
+  // Queue full - don't try inline indexing (causes stack overflow)
+  Serial.printf("[Index] Queue full; index request for '%s' dropped (will retry on next access)\n", targetPath.c_str());
   delete msg;
 }
 
@@ -2454,7 +2530,6 @@ void storageMonitorTask(void *param) {
     }
 }
 
-// Run a single top-level scan at boot to catch offline changes. Then terminate.
 void immediateEnqueueTopLevelTask(void *param) {
   Serial.println("[Index] immediateEnqueueTopLevelTask: starting one-shot boot scan of top-level dirs");
   File root = SD_MMC.open("/");
@@ -2465,20 +2540,33 @@ void immediateEnqueueTopLevelTask(void *param) {
     return;
   }
 
+  // Known bucket roots that the indexWorker loop will handle
+  const char* buckets[] = { "Shows", "Music", "Movies", "Books", "Gallery", "Files", NULL };
+  
   File entry;
   while ((entry = root.openNextFile())) {
     if (entry.isDirectory()) {
-      String path = String(entry.name()); // e.g. "/Music"
-      // enqueue the bucket root; coalescing will guard against duplicates
-      enqueueIndexUpdateForPath(path);
+      String path = String(entry.name());
+      if (!path.startsWith("/")) path = "/" + path;
+      
+      // Skip bucket roots - they're handled by the main indexWorker loop
+      bool isBucket = false;
+      for (int i = 0; buckets[i]; i++) {
+        if (path == String("/") + buckets[i]) {
+          Serial.printf("[Index] Skipping bucket root '%s' (handled by main loop)\n", path.c_str());
+          isBucket = true;
+          break;
+        }
+      }
+      
+      if (!isBucket) {
+        enqueueIndexUpdateForPath(path);
+      }
       vTaskDelay(pdMS_TO_TICKS(1));
     }
     entry.close();
   }
   root.close();
-
-  // Mark the request consumed (admin handler set requestIndexing earlier)
-  requestIndexing = false;
 
   Serial.println("[Index] immediateEnqueueTopLevelTask: enqueue complete, exiting");
   vTaskDelete(NULL);
@@ -2575,14 +2663,12 @@ void incrementalScanTask(void *param) {
         return;
     }
 
-    // Walk the root once and enqueue index builds one-per-top-level-dir.
     File entry;
     while ((entry = root.openNextFile())) {
         if (entry.isDirectory()) {
-            String path = String(entry.name()); // e.g. "/Music"
-            // Try to enqueue; coalescing will guard against duplicates.
+            String path = String(entry.path());  // FIXED: use path() not name() to get "/Music" format
+            if (!path.startsWith("/")) path = "/" + path;  // Ensure leading slash
             enqueueIndexUpdateForPath(path);
-            // tiny yield between enqueues
             vTaskDelay(pdMS_TO_TICKS(1));
         }
         entry.close();
@@ -2590,96 +2676,73 @@ void incrementalScanTask(void *param) {
 
     root.close();
     Serial.println("[Index] incrementalScanTask: completed one-shot boot scan, exiting");
-    vTaskDelete(NULL); // done 
+    vTaskDelete(NULL);
 }
 void bootCoordinatorTask(void *pv) {
   Serial.println("[BootCoord] bootCoordinatorTask starting; delaying so UI can come up...");
 
-  // Short delay so webserver/UI are ready before heavy work starts
-  vTaskDelay(pdMS_TO_TICKS(8000));
+  vTaskDelay(pdMS_TO_TICKS(3000));
 
-  // Ensure settings have loaded 
   int settingsWaitLoops = 0;
-  while (!settingsReady && settingsWaitLoops++ < 100) { // ~5 seconds max
+  while (!settingsReady && settingsWaitLoops++ < 100) {
     vTaskDelay(pdMS_TO_TICKS(50));
   }
 
-  // Check if index directory exists, create it and trigger initial build if missing
+  // Check if index directory exists - ALWAYS trigger scan if missing
   if (!SD_MMC.exists(INDEX_DIR)) {
-    Serial.println("[BootCoord] Index directory missing - creating and triggering initial build");
+    Serial.println("[BootCoord] Index directory missing - MUST create indexes (ignoring autoGenerateMedia setting)");
 
-    // Show filesystem update message on LVGL screen (will fix this later, currently doesnt show)
-    lv_textarea_set_text(ui_MediaGen, "Updating filesystem to v2, please wait...\nThis can take a while");
-    lv_timer_handler(); // Force screen update
-    Serial.println("[BootCoord] LVGL screen updated with filesystem v2 message");
+    lv_obj_clear_flag(ui_MediaGen, LV_OBJ_FLAG_HIDDEN);
+    lv_textarea_set_text(ui_MediaGen, "First-time setup detected\nBuilding media indexes...\nThis will take a few minutes\n\nDevice will reboot when complete");
+    lv_timer_handler();
+    Serial.println("[BootCoord] LVGL screen updated with first-time setup message");
 
     ensureIndexDir();
 
-    // Force initial indexing regardless of autoGenerateMedia setting
-    Serial.println("[BootCoord] First-time setup detected -> starting initial index build");
-    sdScanCompleted = false;
-    sdScanInProgress = true;
+    firstTimeIndexBuild = true;
+    
+    Serial.println("[BootCoord] First-time setup -> starting full index build (required)");
+    
+    sdScanCompleted = true;
+    sdScanInProgress = false;
 
-    BaseType_t r = xTaskCreatePinnedToCore(sdScanTask, "SDScanFirstTime", 12 * 1024, NULL, 1, NULL, 1);
-    if (r == pdPASS) {
-      Serial.println("[BootCoord] Initial sdScanTask spawned for first-time setup");
-    } else {
-      Serial.println("[BootCoord] Failed to spawn initial sdScanTask");
-    }
-
-    // Fire off the incrementalScanTask to enqueue top-level buckets
     BaseType_t ir = xTaskCreatePinnedToCore(incrementalScanTask, "IncScanFirstTime", 12 * 1024, NULL, 1, NULL, 1);
     if (ir == pdPASS) {
-      Serial.println("[BootCoord] Initial incrementalScanTask started for first-time setup");
-    } else {
-      Serial.println("[BootCoord] Failed to start initial incrementalScanTask");
+      Serial.println("[BootCoord] Initial incrementalScanTask started");
     }
 
-    // Allow index worker to proceed and set the request flag
-    bootIndexAllowed = true;
     requestIndexing = true;
-    Serial.println("[BootCoord] First-time index build queued");
-
-    // Exit early since we've handled the first-time setup
-    vTaskDelay(pdMS_TO_TICKS(100));
-    Serial.println("[BootCoord] first-time setup coordination done; exiting task");
+    Serial.println("[BootCoord] First-time index build queued - will reboot when complete");
+    Serial.println("[BootCoord] coordination done; exiting task");
     vTaskDelete(NULL);
     return;
   }
 
-  // If user wants auto-generation at boot, start SD scan in background
+  // Index directory exists - honor autoGenerateMedia setting
   if (settings.autoGenerateMedia) {
-    Serial.println("[BootCoord] autoGenerateMedia==true -> starting SD scan task now (background)");
-    sdScanCompleted = false;  // clear before starting
-    sdScanInProgress = true;
+    Serial.println("[BootCoord] autoGenerateMedia==true -> starting background scan (storage scan deferred)");
+    
+    sdScanCompleted = false;
+    sdScanInProgress = false;
 
-    BaseType_t r = xTaskCreatePinnedToCore(sdScanTask, "SDScanBoot", 12 * 1024, NULL, 1, NULL, 1);
-    if (r == pdPASS) {
-      Serial.println("[BootCoord] sdScanTask spawned (non-blocking)");
-    } else {
-      Serial.println("[BootCoord] Failed to spawn sdScanTask; continuing without blocking");
-    }
-
-    // Fire off the incrementalScanTask to enqueue top-level buckets
+    // DON'T set requestIndexing here - setup() already did it
+    // Just spawn incrementalScanTask to populate the queue with directories
     BaseType_t ir = xTaskCreatePinnedToCore(incrementalScanTask, "IncScanBoot", 12 * 1024, NULL, 1, NULL, 1);
     if (ir == pdPASS) {
-      Serial.println("[BootCoord] incrementalScanTask started to enqueue top-level dirs");
-    } else {
-      Serial.println("[BootCoord] Failed to start incrementalScanTask");
+      Serial.println("[BootCoord] incrementalScanTask started to populate index queue");
     }
-
-    // Allow index worker to proceed; set the request flag so the worker will perform initial sweep.
-    bootIndexAllowed = true;
-    requestIndexing = true;
-    Serial.println("[BootCoord] queued initial index request (non-blocking) and exiting BootCoord");
+    
+    // Note: requestIndexing was already set by setup() and may already be processing
+    Serial.println("[BootCoord] Auto-index already queued by setup(), directories being enqueued");
   } else {
-    // autoGenerateMedia == false -> skip SD/index at boot, but allow index worker to run event-driven
-    Serial.println("[BootCoord] autoGenerateMedia==false -> skipping SD/index on boot");
-    bootIndexAllowed = true;
+    Serial.println("[BootCoord] autoGenerateMedia==false -> skipping background scan");
+    Serial.println("[BootCoord] Indexes exist, storage info will load from cache or on-demand");
+    
+    sdScanCompleted = true;
+    sdScanInProgress = false;
   }
 
-  // We're done; BootCoord should not block, it exits so boot is free.
-  vTaskDelay(pdMS_TO_TICKS(100)); // tiny breathing room
+  vTaskDelay(pdMS_TO_TICKS(100));
   Serial.println("[BootCoord] boot coordination done; exiting task");
   vTaskDelete(NULL);
 }
@@ -2760,7 +2823,7 @@ void backgroundRegenerateTask(void *pv) {
   // If an SD scan is not in progress, start one in background and wait for its initial pass.
   if (!sdScanInProgress) {
     sdScanCompleted = false;
-    BaseType_t r = xTaskCreatePinnedToCore(sdScanTask, "SDScanAdmin", 12 * 1024, NULL, 1, NULL, 1);
+    BaseType_t r = xTaskCreatePinnedToCore(sdScanTask, "SDScanAdmin", 20 * 1024, NULL, 1, NULL, 1);
     if (r == pdPASS) {
       Serial.println("[AdminRegen] sdScanTask started by admin regenerate");
       // Wait for initial pass (timeout to avoid hanging forever)
@@ -3036,37 +3099,6 @@ void setup() {
     // Start the storage monitor (unchanged)
     xTaskCreatePinnedToCore(storageMonitorTask, "StorageMonitor", 4096, NULL, 1, &storageMonitorTaskHandle, 0);
 
-    // Start boot coordinator which will start sdScanTask and incrementalScanTask in background (after a short delay).
-    // This prevents heavy work from blocking setup() / webserver startup.
-    BaseType_t cr = xTaskCreatePinnedToCore(bootCoordinatorTask, "BootCoord", 8 * 1024, NULL, 1, NULL, 1);
-    if (cr == pdPASS) {
-      Serial.println("[Setup] bootCoordinatorTask started (will start background SD/index after boot)");
-    } else {
-      Serial.println("[Setup] Failed to start bootCoordinatorTask - falling back to direct starts");
-
-      // Fallback: attempt to preserve previous behavior if coordinator can't start.
-      static bool sdScanStarted = false;
-      if (!sdScanStarted) {
-        if (settings.autoGenerateMedia || !haveSdSnapshot) {
-          BaseType_t r = xTaskCreatePinnedToCore(sdScanTask, "SDScan", 12 * 1024, NULL, 1, NULL, 1);
-          if (r == pdPASS) {
-            sdScanStarted = true;
-            Serial.println("[SDBAR] background SD scan task started (fallback)");
-          } else {
-            Serial.println("[SDBAR] Failed to start SD scan task (fallback)");
-          }
-        } else {
-          Serial.println("[SDBAR] Skipping boot SD scan because autoGenerateMedia == false and snapshot exists (fallback)");
-        }
-      }
-
-      if (settings.autoGenerateMedia || requestIndexing) {
-        xTaskCreatePinnedToCore(incrementalScanTask, "IncrementalScan", 12 * 1024, NULL, 1, NULL, 0);
-      } else {
-        Serial.println("[Index] Skipping boot incremental index enqueue (autoGenerateMedia == false) (fallback)");
-      }
-    }
-
     // Continue registering handlers (unchanged)
     createSimpleUploadHandler("Movies", "/upload-movie");
     createSimpleUploadHandler("Music", "/upload-music");
@@ -3288,26 +3320,20 @@ void setup() {
         return;
       }
 
-      // If already running, reject
-      if (indexingInProgress) {
+      if (indexingInProgress) { 
         request->send(409, "text/plain", "Index already in progress");
         webLog("[ADMIN] Index request ignored - indexing already in progress", "warning");
         return;
       }
 
-      // If a request is already queued, tell caller
       if (requestIndexing) {
         request->send(202, "text/plain", "Index request already queued");
         webLog("[ADMIN] Duplicate index request ignored - already queued", "warning");
         return;
       }
 
-      // Queue indexing for the existing background scan task to pick up.
       requestIndexing = true;
 
-      // If autoGenerateMedia is disabled we still want a responsive "Regenerate" button.
-      // Spawn a short-lived task to enqueue top-level directories for the index worker to process.
-      // Otherwise, if autoGenerateMedia is enabled we rely on the existing boot/enqueue behavior.
       if (!settings.autoGenerateMedia) {
         BaseType_t tr = xTaskCreatePinnedToCore(immediateEnqueueTopLevelTask, "ImmediateEnq", 6 * 1024, NULL, 1, NULL, 1);
         if (tr == pdPASS) {
@@ -3317,7 +3343,6 @@ void setup() {
         }
       }
 
-      // Remove legacy one-time flag
       if (SD_MMC.exists("/generate_once.flag")) {
         SD_MMC.remove("/generate_once.flag");
         webLog("[ADMIN] Removed legacy generate_once.flag file", "info");
@@ -4478,10 +4503,6 @@ attachInterrupt(BOOT_BUTTON_PIN, [](){
           lastSdbarUpdateLocal = now;
         }
 
-        if (sdbarDirty) {
-          updateSDBAR();
-          sdbarDirty = false;
-        }
 
         updateClientCount();
 
@@ -4559,10 +4580,6 @@ void loop() {
     if (sdbarDirty && (millis() - lastSdbarUpdate > 250)) {
       updateSDBAR_UI_ThreadOnly();
       lastSdbarUpdate = millis();
-    }
-    if (sdbarDirty) {
-    updateSDBAR();
-    sdbarDirty = false;
     }
     delay(5); // Prevent watchdog starvation
     updateClientCount();
