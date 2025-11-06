@@ -1,4 +1,5 @@
 <!DOCTYPE html>
+<!-- Version 2.1 -->
 <html lang="en">
 <head>
     <meta charset="utf-8" />
@@ -282,31 +283,26 @@
             display: flex;
             align-items: center;
             justify-content: center;
-            background: #eee;
+            background: #efeff5;
             color: #555;
-            font-size: 0.95rem;
+            font-size: 0.9rem;
             text-align: center;
             width: 100%;
             aspect-ratio: 2/3;
-            padding: 6px;
-            overflow: hidden
         }
 
         .overlay-title {
-            position: absolute;
-            left: 8px;
-            right: 8px;
-            top: 8px;
-            bottom: 8px;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            text-align: center;
-            padding: 6px;
-            z-index: 3;
-            color: #06306f;
-            font-weight: 700;
-            background: transparent
+            position:absolute;
+            inset:0;
+            display:flex;
+            align-items:center;
+            justify-content:center;
+            z-index:2;
+            text-align:center;
+            font-weight:700;
+            color:#06306f;
+            pointer-events:none;
+            padding:6px
         }
 
         .media-thumb {
@@ -318,7 +314,7 @@
             left: 0;
             z-index: 1;
             opacity: 0;
-            transition: opacity .25s ease
+            transition: opacity .35s ease;
         }
 
         .badge-resume {
@@ -1091,7 +1087,7 @@
                 </div>
             </div>
         </div>
-        <audio id="audioElement" preload="metadata"></audio>
+        <audio id="audioElement" preload="metadata" crossorigin="anonymous"></audio>
     </div>
 
     <footer>© <span id="year"></span> Jcorp Nomad</footer>
@@ -1129,7 +1125,7 @@
             title = title.replace(/\s*($$\d{4}$$|\d{4})\s*$/, '').trim();
             return title || filename;
         }
-        function fileUrlDirect(path) { if (!path) return ''; return encodeURI(path); }
+        function fileUrlDirect(path) { if (!path) return ''; return `/media?file=${encodeURIComponent(normalizePath(path))}`; }
         function formatTime(seconds) {
             if (!isFinite(seconds)) return '0:00';
             const mins = Math.floor(seconds / 60);
@@ -1396,25 +1392,23 @@
                 card.dataset.path = pathVal;
 
                 const coverPath = item.cover || '';
-                const overlay = `<div class="overlay-title">${escapeHtml(item.name)}</div>`;
                 const imgHTML = coverPath ? `<img class="media-thumb" loading="lazy" alt="${escapeHtml(item.name)}">` : '';
 
                 card.innerHTML = `
-              <div class="thumb-wrapper" aria-hidden="false">
-                ${overlay}
-                ${imgHTML}
-              </div>
-            `;
+                <div class="thumb-wrapper" aria-hidden="false">
+                    <span class="fallback-text">${escapeHtml(item.name)}</span>
+                    ${imgHTML}
+                </div>
+                `;
 
                 const img = card.querySelector('img');
-                const overlayEl = card.querySelector('.overlay-title');
+                const fallback = card.querySelector('.fallback-text');
                 if (img && coverPath) {
-                    img.addEventListener('load', () => { img.style.opacity = '1'; if (overlayEl) overlayEl.style.display = 'none'; });
-                    img.addEventListener('error', () => { img.style.display = 'none'; if (overlayEl) overlayEl.style.display = 'flex'; });
+                    img.addEventListener('load', () => { img.style.opacity = '1'; if (fallback) fallback.style.display = 'none'; });
+                    img.addEventListener('error', () => { img.style.display = 'none'; if (fallback) fallback.style.display = 'block'; });
                     img.src = fileUrlDirect(coverPath);
-                    setTimeout(() => { if (img.complete && img.naturalWidth && img.naturalHeight) { img.style.opacity = '1'; if (overlayEl) overlayEl.style.display = 'none'; } }, 400);
                 } else {
-                    if (overlayEl) overlayEl.style.display = 'flex';
+                    if (fallback) fallback.style.display = 'block';
                 }
 
                 card.addEventListener('click', async () => {
@@ -2211,7 +2205,9 @@
         function openAudioPlayer(file) {
             currentAudio = file;
             audioTitle.textContent = file.name || 'Audiobook';
+            audioElement.pause();
             audioElement.src = fileUrlDirect(file.path);
+            try { audioElement.load(); } catch(e){}
             audioPlayer.classList.add('active');
             updateAudioHeight();
 
