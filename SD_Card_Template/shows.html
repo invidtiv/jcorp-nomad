@@ -1,4 +1,5 @@
 <!DOCTYPE html>
+<!-- Version 2.1 -->
 <html lang="en">
 <head>
 <meta charset="utf-8" />
@@ -1097,7 +1098,7 @@ function openActionModalForEpisode(ep){
 function startDownload(ep){
   if(!confirm(`Download "${ep.name}"?`)) return;
   const a = document.createElement('a');
-  a.href = isVideoName(ep.path) ? `${MEDIA_ENDPOINT}?file=${encodeURIComponent(normalizePath(ep.path))}` : encodeURI(normalizePath(ep.path));
+  a.href = ep.path.startsWith('/') ? ep.path : ('/' + ep.path);
   a.download = ep.name || ep.file;
   document.body.appendChild(a);
   a.click();
@@ -1388,6 +1389,8 @@ async function checkIndex(){
 
 /* Handle incoming hash like #open=%2FShows%2FShowName%2FS1%20E1.mp4
 */
+/* Handle incoming hash like #open=%2FShows%2FShowName%2FS1%20E1.mp4
+*/
 async function handleHashOpenIfPresent(){
   try {
     if(!location.hash) return;
@@ -1405,12 +1408,13 @@ async function handleHashOpenIfPresent(){
     if(!params.open) return;
 
     const openPath = normalizePath(params.open || '');
-    const parts = openPath.split('/').filter(Boolean); // e.g. ['Shows','ShowName','S01E01.mkv']
+    const parts = openPath.split('/').filter(Boolean); // e.g. ['Shows','ShowName','Season1'] or ['Shows','ShowName','S01E01.mkv']
 
-    // If the path is exactly a show directory like /Shows/ShowName (i.e. two path parts),
-    // open the episode modal instead of playing.
-    if(parts.length >= 2 && parts[0].toLowerCase() === 'shows' && parts.length === 2){
-      const showDirCandidate = '/' + parts.slice(0,2).join('/');
+    // If the path is a show directory or season directory, open the episode modal instead of playing.
+    // Handle both /Shows/ShowName (2 parts) and /Shows/ShowName/Season1 (3+ parts where last part is a directory)
+    if(parts.length >= 2 && parts[0].toLowerCase() === 'shows'){
+      // For paths like /Shows/ShowName or /Shows/ShowName/Season1, we want to open the show's episode modal
+      const showDirCandidate = '/' + parts.slice(0,2).join('/'); // Always use first 2 parts for show directory
 
       // ensure library is loaded so we can find the show object
       if(!shows || !shows.length){
@@ -1427,16 +1431,22 @@ async function handleHashOpenIfPresent(){
       }
 
       if(show){
-        // load episodes, set currentShow and open modal (no playback)
-        await loadSeriesEpisodes(show);
-        currentShow = show;
-        await ensureFlattenedForCurrentShow();
-        openEpisodeModal(show);
+        // Check if this is likely a season directory (3+ parts and last part doesn't look like a video file)
+        const isSeasonDir = parts.length >= 3 && !isVideoName(parts[parts.length - 1]);
+        
+        // If it's a season directory or just the show directory, open the episode modal
+        if(parts.length === 2 || isSeasonDir){
+          // load episodes, set currentShow and open modal (no playback)
+          await loadSeriesEpisodes(show);
+          currentShow = show;
+          await ensureFlattenedForCurrentShow();
+          openEpisodeModal(show);
+          
+          // Clear the hash so reloads don't re-open the modal
+          history.replaceState(null, '', location.pathname + location.search);
+          return;
+        }
       }
-
-      // Clear the hash so reloads don't re-open the modal
-      history.replaceState(null, '', location.pathname + location.search);
-      return;
     }
 
     // Otherwise treat open as an explicit episode/file request (existing behavior preserved)
@@ -1490,7 +1500,6 @@ async function handleHashOpenIfPresent(){
     console.warn('handleHashOpenIfPresent failed', err);
   }
 }
-
 // also respond to hash changes while on page
 window.addEventListener('hashchange', ()=> handleHashOpenIfPresent());
 
@@ -1512,5 +1521,4 @@ sortSelect.addEventListener('change', () => applySort(sortSelect.value));
 
 </body>
 </html>
-
 
