@@ -1,4 +1,5 @@
 <!DOCTYPE html>
+<!-- Version 2.1 -->
 <html lang="en">
 <head>
 <meta charset="utf-8" />
@@ -346,6 +347,7 @@ const RE_VIDEO = /\.(mp4|mkv|avi|mov|ts|webm|m4v)$/i;
 const RE_AUDIO = /\.(mp3|flac|wav|m4a|aac|ogg)$/i;
 const RE_IMAGE = /\.(jpe?g|png|webp|gif|heic|avif)$/i;
 const RE_BOOK  = /\.(pdf|epub|mobi|azw3|txt)$/i;
+const DISABLE_ZIM = false; // Set to true to disable ZIM functionality (doesnt work rn so leave it off)
 
 // debug logger 
 const __debugEl = null;
@@ -474,25 +476,54 @@ async function loadAndOpenArchive(zimPath) {
     throw e;
   }
 }
+
+let zimListCache = null;
+let zimListPromise = null;
+
 async function tryFetchZimList() {
-  debugLog('tryFetchZimList: fetching /zim-list');
-  try {
-    const j = await tryFetchJSON('/zim-list');
-    debugLog('/zim-list response (raw):', j);
-    if (!j || !Array.isArray(j)) {
-      debugLog('/zim-list: unexpected response (not an array)');
-      return [];
-    }
-   
-    for(const z of j) {
-      if(!z.path) debugLog('zim entry missing path:', z);
-    }
-    return j;
-  } catch (e) {
-    console.warn('tryFetchZimList failed', e);
-    debugLog('tryFetchZimList failed', String(e));
-    return [];
+  // Return cached result if available and recent (5 minutes)
+  if (zimListCache && (Date.now() - zimListCache.timestamp < 300000)) {
+    debugLog('tryFetchZimList: returning cached result');
+    return zimListCache.data;
   }
+  
+  // Return existing promise if one is in flight
+  if (zimListPromise) {
+    debugLog('tryFetchZimList: returning existing promise');
+    return zimListPromise;
+  }
+  
+  debugLog('tryFetchZimList: fetching /zim-list');
+  zimListPromise = (async () => {
+    try {
+      const j = await tryFetchJSON('/zim-list');
+      debugLog('/zim-list response (raw):', j);
+      if (!j || !Array.isArray(j)) {
+        debugLog('/zim-list: unexpected response (not an array)');
+        return [];
+      }
+     
+      for(const z of j) {
+        if(!z.path) debugLog('zim entry missing path:', z);
+      }
+      
+      // Cache the result
+      zimListCache = {
+        data: j,
+        timestamp: Date.now()
+      };
+      
+      return j;
+    } catch (e) {
+      console.warn('tryFetchZimList failed', e);
+      debugLog('tryFetchZimList failed', String(e));
+      return [];
+    } finally {
+      zimListPromise = null;
+    }
+  })();
+  
+  return zimListPromise;
 }
 
 /*
@@ -500,8 +531,33 @@ async function tryFetchZimList() {
   Returns an array of lightweight result objects compatible with renderResults:
   { title, path, bucket:'ZIM', subtype:'zim' }
 */
+// Replace the tryZimSuggest function (around line 503-553)
+let lastZimSuggestTime = 0;
+let zimSuggestCache = new Map();
+
 async function tryZimSuggest(term, maxResults = 20) {
   if (!term || !term.trim()) return [];
+  
+  const now = Date.now();
+  const cacheKey = `${term.toLowerCase()}_${maxResults}`;
+  
+  // Check cache first (30 seconds)
+  if (zimSuggestCache.has(cacheKey)) {
+    const cached = zimSuggestCache.get(cacheKey);
+    if (now - cached.timestamp < 30000) {
+      debugLog('tryZimSuggest: returning cached result for', term);
+      return cached.data;
+    }
+  }
+  
+  // Rate limit: max one request per 500ms
+  if (now - lastZimSuggestTime < 500) {
+    debugLog('tryZimSuggest: rate limited, skipping', term);
+    return [];
+  }
+  
+  lastZimSuggestTime = now;
+  
   try {
     // ensure lib runtime is loaded
     await loadLibZimScript();
@@ -544,6 +600,21 @@ async function tryZimSuggest(term, maxResults = 20) {
         raw: null
       });
     }
+    
+    // Cache the result
+    zimSuggestCache.set(cacheKey, {
+      data: out,
+      timestamp: now
+    });
+    
+    // Clean old cache entries (keep only last 10)
+    if (zimSuggestCache.size > 10) {
+      const entries = Array.from(zimSuggestCache.entries());
+      entries.sort((a, b) => b[1].timestamp - a[1].timestamp);
+      zimSuggestCache.clear();
+      entries.slice(0, 10).forEach(([k, v]) => zimSuggestCache.set(k, v));
+    }
+    
     debugLog('tryZimSuggest: out.length', out.length);
     return out;
   } catch (e) {
@@ -608,10 +679,10 @@ themeBtn.addEventListener('click', ()=> applyTheme(!document.body.classList.cont
     const __fetchInFlight = new Map();
 
     async function cachedFetch(url, timeoutMs = 3000) {
-        // Return cached result if available (5s TTL)
+        // Return cached result if available (60s TTL instead of 5s)
         if (__fetchCache.has(url)) {
             const cached = __fetchCache.get(url);
-            if (Date.now() - cached.ts < 5000) return cached.result;
+            if (Date.now() - cached.ts < 60000) return cached.result; // 60 seconds
         }
 
         // Wait for in-flight request if one exists
@@ -720,243 +791,257 @@ function previewPathFromItemPath(itemPath){
 /* Builds a robust search index and preview maps (concurrent fetches) */
 async function buildSearchIndex(){
   if(searchIndexCache && searchIndexCache.entries) return searchIndexCache.entries;
-  previewByPath = new Map();
-  previewByBaseDir = new Map();
-  const byBucket = {};
-  for(const b of BUCKETS) byBucket[b] = [];
-
-  const fetchPromises = BUCKETS.map(b => {
-    const idxUrl = `${INDEX_DIR}/${b}.index.ndjson`;
-    return tryFetchText(idxUrl).then(txt => ({ bucket: b, txt }));
-  });
-  const settled = await Promise.allSettled(fetchPromises);
-  for(const res of settled){
-    if(res.status !== 'fulfilled') continue;
-    const { bucket, txt } = res.value || {};
-    if(!bucket) continue;
-    const arr = parseNdjson(txt || '');
-    for(const obj of arr){
-      if(!obj) continue;
-      const c = classifyEntry(obj, bucket);
-      if(!c) continue;
-      byBucket[bucket].push(c);
-    }
+  
+  // Prevent multiple simultaneous builds
+  if (buildSearchIndex._building) {
+    return buildSearchIndex._building;
   }
+  
+  buildSearchIndex._building = (async () => {
+    try {
+      previewByPath = new Map();
+      previewByBaseDir = new Map();
+      const byBucket = {};
+      for(const b of BUCKETS) byBucket[b] = [];
 
-    const nestedFetches = [];
-    for (const b of ['Shows', 'Music', 'Gallery']) {
-        for (const c of (byBucket[b] || [])) {
-            if (c.kind === 'dir') {
-                const candidate = `${INDEX_DIR}${c.path}.index.ndjson`.replace('//', '/');
-                nestedFetches.push({ url: candidate, bucket: b, parentDir: c.path });
-                const encoded = c.path.replace(/^\//, '').replace(/\//g, '__');
-                nestedFetches.push({ url: `${INDEX_DIR}/${encoded}.index.ndjson`, bucket: b, parentDir: c.path });
+      const fetchPromises = BUCKETS.map(b => {
+        const idxUrl = `${INDEX_DIR}/${b}.index.ndjson`;
+        return tryFetchText(idxUrl).then(txt => ({ bucket: b, txt }));
+      });
+      const settled = await Promise.allSettled(fetchPromises);
+      for(const res of settled){
+        if(res.status !== 'fulfilled') continue;
+        const { bucket, txt } = res.value || {};
+        if(!bucket) continue;
+        const arr = parseNdjson(txt || '');
+        for(const obj of arr){
+          if(!obj) continue;
+          const c = classifyEntry(obj, bucket);
+          if(!c) continue;
+          byBucket[bucket].push(c);
+        }
+      }
+
+        const nestedFetches = [];
+        for (const b of ['Shows', 'Music', 'Gallery']) {
+            for (const c of (byBucket[b] || [])) {
+                if (c.kind === 'dir') {
+                    const candidate = `${INDEX_DIR}${c.path}.index.ndjson`.replace('//', '/');
+                    nestedFetches.push({ url: candidate, bucket: b, parentDir: c.path });
+                    const encoded = c.path.replace(/^\//, '').replace(/\//g, '__');
+                    nestedFetches.push({ url: `${INDEX_DIR}/${encoded}.index.ndjson`, bucket: b, parentDir: c.path });
+                }
             }
         }
-    }
 
-    // Fetch with concurrency limit (3 at a time, 2s timeout each)
-    const nestedResults = [];
-    const concurrency = 3;
-    for (let i = 0; i < nestedFetches.length; i += concurrency) {
-        const batch = nestedFetches.slice(i, i + concurrency);
-        const batchPromises = batch.map(async ({ url, bucket, parentDir }) => {
-            const text = await tryFetchText(url, 2000); // 2s timeout
-            return { bucket, parentDir, text };
-        });
-        const settled = await Promise.allSettled(batchPromises);
-        nestedResults.push(...settled.filter(r => r.status === 'fulfilled').map(r => r.value));
-    }
-    const nestedSettled = nestedResults;
-  for (const data of nestedSettled) {
-    if(!data || !data.text) continue;
-    const narr = parseNdjson(data.text || '');
-    for(const n of narr){
-      if(!n) continue;
-      const c2 = classifyEntry(n, data.bucket);
-      if(!c2) continue;
-      c2.parentDir = data.parentDir;
-      byBucket[data.bucket].push(c2);
-    }
-  }
-
-  const entries = [];
-  function combineMap(list, bucketName){
-    const map = new Map();
-    for(const it of list){
-      if(it.kind !== 'file') continue;
-      const base = basenameNoExt(it.name || it.path.split('/').pop() || '');
-      const key = base.toLowerCase();
-      if(!map.has(key)) map.set(key, { base, files: [], preview: null, dirs: new Set() });
-      map.get(key).files.push(it);
-      if(it.path) map.get(key).dirs.add((it.path.replace(/\/[^/]+$/,'') || '').toLowerCase());
-      if(it.subtype === 'image' && !map.get(key).preview) map.get(key).preview = it.path;
-    }
-    for(const [k,v] of map.entries()){
-      const video = v.files.find(x => x.subtype === 'video');
-      const book  = v.files.find(x => x.subtype === 'book');
-      const audio = v.files.find(x => x.subtype === 'audio');
-      if(video){
-        entries.push({ title: friendlyDisplayName(video.name), bucket: bucketName, subtype:'video', path: video.path, preview: v.preview || null, raw: video.raw });
-      } else if(book){
-        entries.push({ title: friendlyDisplayName(book.name), bucket: bucketName, subtype:'book', path: book.path, preview: v.preview || null, raw: book.raw });
-      } else if(audio && bucketName === 'Music'){
-        entries.push({ title: friendlyDisplayName(audio.name), bucket: bucketName, subtype:'audio', path: audio.path, preview:null, raw: audio.raw });
-      } else {
-        if(bucketName !== 'Movies' && bucketName !== 'Books'){
-          const anyFile = v.files[0];
-          if(anyFile) entries.push({ title: friendlyDisplayName(anyFile.name || anyFile.path), bucket:bucketName, subtype:anyFile.subtype||'file', path:anyFile.path, preview:v.preview||null, raw:anyFile.raw });
+        // Fetch with concurrency limit (3 at a time, 2s timeout each)
+        const nestedResults = [];
+        const concurrency = 3;
+        for (let i = 0; i < nestedFetches.length; i += concurrency) {
+            const batch = nestedFetches.slice(i, i + concurrency);
+            const batchPromises = batch.map(async ({ url, bucket, parentDir }) => {
+                const text = await tryFetchText(url, 2000); // 2s timeout
+                return { bucket, parentDir, text };
+            });
+            const settled = await Promise.allSettled(batchPromises);
+            nestedResults.push(...settled.filter(r => r.status === 'fulfilled').map(r => r.value));
+        }
+        const nestedSettled = nestedResults;
+      for (const data of nestedSettled) {
+        if(!data || !data.text) continue;
+        const narr = parseNdjson(data.text || '');
+        for(const n of narr){
+          if(!n) continue;
+          const c2 = classifyEntry(n, data.bucket);
+          if(!c2) continue;
+          c2.parentDir = data.parentDir;
+          byBucket[data.bucket].push(c2);
         }
       }
-    }
-  }
 
-  combineMap(byBucket['Movies'] || [], 'Movies');
-
-  (function(){
-    const seriesMap = new Map();
-    for(const it of (byBucket['Shows']||[])){
-      if(it.kind === 'dir'){
-        const key = (it.path || '').toLowerCase();
-        if(!seriesMap.has(key)) seriesMap.set(key, { title: it.name || it.path, preview: null, dir: it.path });
-      } else if(it.kind === 'file'){
-        const parent = (it.parentDir || (it.path.split('/').slice(0,-1).join('/')) || '').toLowerCase();
-        const key = parent || basenameNoExt(it.name).toLowerCase();
-        if(!seriesMap.has(key)) seriesMap.set(key, { title: it.parentDir || it.name || key, preview: null, dir: it.parentDir || '' });
-        if(it.subtype === 'image' && it.parentDir){
-          const s = seriesMap.get(key);
-          if(s && !s.preview) s.preview = it.path;
+      const entries = [];
+      function combineMap(list, bucketName){
+        const map = new Map();
+        for(const it of list){
+          if(it.kind !== 'file') continue;
+          const base = basenameNoExt(it.name || it.path.split('/').pop() || '');
+          const key = base.toLowerCase();
+          if(!map.has(key)) map.set(key, { base, files: [], preview: null, dirs: new Set() });
+          map.get(key).files.push(it);
+          if(it.path) map.get(key).dirs.add((it.path.replace(/\/[^/]+$/,'') || '').toLowerCase());
+          if(it.subtype === 'image' && !map.get(key).preview) map.get(key).preview = it.path;
+        }
+        for(const [k,v] of map.entries()){
+          const video = v.files.find(x => x.subtype === 'video');
+          const book  = v.files.find(x => x.subtype === 'book');
+          const audio = v.files.find(x => x.subtype === 'audio');
+          if(video){
+            entries.push({ title: friendlyDisplayName(video.name), bucket: bucketName, subtype:'video', path: video.path, preview: v.preview || null, raw: video.raw });
+          } else if(book){
+            entries.push({ title: friendlyDisplayName(book.name), bucket: bucketName, subtype:'book', path: book.path, preview: v.preview || null, raw: book.raw });
+          } else if(audio && bucketName === 'Music'){
+            entries.push({ title: friendlyDisplayName(audio.name), bucket: bucketName, subtype:'audio', path: audio.path, preview:null, raw: audio.raw });
+          } else {
+            if(bucketName !== 'Movies' && bucketName !== 'Books'){
+              const anyFile = v.files[0];
+              if(anyFile) entries.push({ title: friendlyDisplayName(anyFile.name || anyFile.path), bucket:bucketName, subtype:anyFile.subtype||'file', path:anyFile.path, preview:v.preview||null, raw:anyFile.raw });
+            }
+          }
         }
       }
-    }
-    for(const [k,v] of seriesMap.entries()){
-      entries.push({ title: friendlyDisplayName(v.title), bucket:'Shows', subtype:'series', path: v.dir, preview: v.preview || null });
-    }
-  })();
 
-  combineMap(byBucket['Books'] || [], 'Books');
+      combineMap(byBucket['Movies'] || [], 'Movies');
 
-  (function(){
-    const seen = new Set();
-    for(const g of (byBucket['Gallery']||[])){
-      if(g.kind !== 'file') continue;
-      const subtype = g.subtype || (RE_VIDEO.test(g.path)?'video':(RE_IMAGE.test(g.path)?'image':'other'));
-      const dir = (g.path||'').replace(/\/[^/]+$/,'').toLowerCase();
-      const base = basenameNoExt(g.name||g.path).toLowerCase();
-      const key = `${base}|${dir}|${subtype}`;
-      if(seen.has(key)) continue;
-      seen.add(key);
-      entries.push({ title: friendlyDisplayName(g.name||g.path), bucket:'Gallery', subtype, path: g.path, preview: subtype==='image'?g.path:null, raw:g.raw });
-    }
-  })();
+      (function(){
+        const seriesMap = new Map();
+        for(const it of (byBucket['Shows']||[])){
+          if(it.kind === 'dir'){
+            const key = (it.path || '').toLowerCase();
+            if(!seriesMap.has(key)) seriesMap.set(key, { title: it.name || it.path, preview: null, dir: it.path });
+          } else if(it.kind === 'file'){
+            const parent = (it.parentDir || (it.path.split('/').slice(0,-1).join('/')) || '').toLowerCase();
+            const key = parent || basenameNoExt(it.name).toLowerCase();
+            if(!seriesMap.has(key)) seriesMap.set(key, { title: it.parentDir || it.name || key, preview: null, dir: it.parentDir || '' });
+            if(it.subtype === 'image' && it.parentDir){
+              const s = seriesMap.get(key);
+              if(s && !s.preview) s.preview = it.path;
+            }
+          }
+        }
+        for(const [k,v] of seriesMap.entries()){
+          entries.push({ title: friendlyDisplayName(v.title), bucket:'Shows', subtype:'series', path: v.dir, preview: v.preview || null });
+        }
+      })();
 
-  (function(){
-    const seen = new Set();
-    for(const m of (byBucket['Music']||[])){
-      if(m.kind !== 'file' || m.subtype !== 'audio') continue;
-      const dir = (m.path||'').replace(/\/[^/]+$/,'').toLowerCase();
-      const base = basenameNoExt(m.name).toLowerCase();
-      const key = `${base}|${dir}`;
-      if(seen.has(key)) continue;
-      seen.add(key);
-      entries.push({ title: friendlyDisplayName(m.name), bucket:'Music', subtype:'audio', path: m.path, preview:null, raw:m.raw });
-    }
-  })();
+      combineMap(byBucket['Books'] || [], 'Books');
 
-  (function(){
-    const seen = new Set();
-    for(const f of (byBucket['Files']||[])){
-      if(f.kind !== 'file') continue;
-      const dir = (f.path||'').replace(/\/[^/]+$/,'').toLowerCase();
-      const base = basenameNoExt(f.name).toLowerCase();
-      const key = `${base}|${dir}`;
-      if(seen.has(key)) continue;
-      seen.add(key);
-      entries.push({ title: friendlyDisplayName(f.name), bucket:'Files', subtype:'file', path: f.path, preview:null, raw:f.raw });
-    }
-  })();
+      (function(){
+        const seen = new Set();
+        for(const g of (byBucket['Gallery']||[])){
+          if(g.kind !== 'file') continue;
+          const subtype = g.subtype || (RE_VIDEO.test(g.path)?'video':(RE_IMAGE.test(g.path)?'image':'other'));
+          const dir = (g.path||'').replace(/\/[^/]+$/,'').toLowerCase();
+          const base = basenameNoExt(g.name||g.path).toLowerCase();
+          const key = `${base}|${dir}|${subtype}`;
+          if(seen.has(key)) continue;
+          seen.add(key);
+          entries.push({ title: friendlyDisplayName(g.name||g.path), bucket:'Gallery', subtype, path: g.path, preview: subtype==='image'?g.path:null, raw:g.raw });
+        }
+      })();
 
-  function addMissingFilesFromBucket(bucketName){
-    const list = byBucket[bucketName] || [];
-    for(const it of list){
-      if(it.kind !== 'file') continue;
-      if(it.subtype === 'image') continue;
-      const norm = normalizePath(it.path || '');
-      if(entries.some(e => e.path && normalizePath(e.path) === norm && (e.bucket || '').toLowerCase() === bucketName.toLowerCase())) continue;
-      entries.push({
-        title: friendlyDisplayName(it.name || it.path || ''),
-        bucket: bucketName,
-        subtype: it.subtype || 'file',
-        path: it.path,
-        preview: null,
-        raw: it.raw
-      });
-    }
-  }
-  addMissingFilesFromBucket('Movies');
-  addMissingFilesFromBucket('Books');
+      (function(){
+        const seen = new Set();
+        for(const m of (byBucket['Music']||[])){
+          if(m.kind !== 'file' || m.subtype !== 'audio') continue;
+          const dir = (m.path||'').replace(/\/[^/]+$/,'').toLowerCase();
+          const base = basenameNoExt(m.name).toLowerCase();
+          const key = `${base}|${dir}`;
+          if(seen.has(key)) continue;
+          seen.add(key);
+          entries.push({ title: friendlyDisplayName(m.name), bucket:'Music', subtype:'audio', path: m.path, preview:null, raw:m.raw });
+        }
+      })();
 
-  for(const e of entries){
-    if(!e.path) continue;
-    const p = (e.path || '').toLowerCase();
-    if(p.includes('/movies/')) e.bucket = 'Movies';
-    else if(p.includes('/shows/')) e.bucket = 'Shows';
-    else if(p.includes('/books/')) e.bucket = 'Books';
-    else if(p.includes('/gallery/')) e.bucket = 'Gallery';
-    else if(p.includes('/music/')) e.bucket = 'Music';
-    else if(!e.bucket) e.bucket = 'Files';
-  }
+      (function(){
+        const seen = new Set();
+        for(const f of (byBucket['Files']||[])){
+          if(f.kind !== 'file') continue;
+          const dir = (f.path||'').replace(/\/[^/]+$/,'').toLowerCase();
+          const base = basenameNoExt(f.name).toLowerCase();
+          const key = `${base}|${dir}`;
+          if(seen.has(key)) continue;
+          seen.add(key);
+          entries.push({ title: friendlyDisplayName(f.name), bucket:'Files', subtype:'file', path: f.path, preview:null, raw:f.raw });
+        }
+      })();
 
-  for(const b of ['Movies','Books']){
-    for(const it of (byBucket[b]||[])){
-      if(it.kind === 'file' && it.subtype === 'image' && it.path){
-        const dir = (it.path || '').replace(/\/[^/]+$/,'').toLowerCase();
-        const base = basenameNoExt(it.name || it.path).toLowerCase();
-        const k = `${base}|${dir}`;
-        if(!previewByBaseDir.has(k)) previewByBaseDir.set(k, it.path);
+      function addMissingFilesFromBucket(bucketName){
+        const list = byBucket[bucketName] || [];
+        for(const it of list){
+          if(it.kind !== 'file') continue;
+          if(it.subtype === 'image') continue;
+          const norm = normalizePath(it.path || '');
+          if(entries.some(e => e.path && normalizePath(e.path) === norm && (e.bucket || '').toLowerCase() === bucketName.toLowerCase())) continue;
+          entries.push({
+            title: friendlyDisplayName(it.name || it.path || ''),
+            bucket: bucketName,
+            subtype: it.subtype || 'file',
+            path: it.path,
+            preview: null,
+            raw: it.raw
+          });
+        }
       }
-    }
-  }
+      addMissingFilesFromBucket('Movies');
+      addMissingFilesFromBucket('Books');
 
-  const finalMap = new Map();
-  for(const e of entries){
-    if(!e.path) continue;
-    const norm = normalizePath(e.path);
-    if((e.bucket === 'Movies' || e.bucket === 'Books') && RE_IMAGE.test(norm)) continue;
-    if(!finalMap.has(norm)){
-      if(!e.preview){
-        const dir = (e.path || '').replace(/\/[^/]+$/,'').toLowerCase();
-        const base = basenameNoExt(e.title || e.path || '').toLowerCase();
-        const k = `${base}|${dir}`;
-        if(previewByBaseDir.has(k)) e.preview = previewByBaseDir.get(k);
-        else e.preview = previewPathFromItemPath(e.path) || null;
+      for(const e of entries){
+        if(!e.path) continue;
+        const p = (e.path || '').toLowerCase();
+        if(p.includes('/movies/')) e.bucket = 'Movies';
+        else if(p.includes('/shows/')) e.bucket = 'Shows';
+        else if(p.includes('/books/')) e.bucket = 'Books';
+        else if(p.includes('/gallery/')) e.bucket = 'Gallery';
+        else if(p.includes('/music/')) e.bucket = 'Music';
+        else if(!e.bucket) e.bucket = 'Files';
       }
-      finalMap.set(norm, e);
-    } else {
-      const existing = finalMap.get(norm);
-      if(!existing.preview && e.preview) existing.preview = e.preview;
-      if(!existing.bucket && e.bucket) existing.bucket = e.bucket;
-      if((!existing.title || existing.title === '(untitled)') && e.title) existing.title = e.title;
+
+      for(const b of ['Movies','Books']){
+        for(const it of (byBucket[b]||[])){
+          if(it.kind === 'file' && it.subtype === 'image' && it.path){
+            const dir = (it.path || '').replace(/\/[^/]+$/,'').toLowerCase();
+            const base = basenameNoExt(it.name || it.path).toLowerCase();
+            const k = `${base}|${dir}`;
+            if(!previewByBaseDir.has(k)) previewByBaseDir.set(k, it.path);
+          }
+        }
+      }
+
+      const finalMap = new Map();
+      for(const e of entries){
+        if(!e.path) continue;
+        const norm = normalizePath(e.path);
+        if((e.bucket === 'Movies' || e.bucket === 'Books') && RE_IMAGE.test(norm)) continue;
+        if(!finalMap.has(norm)){
+          if(!e.preview){
+            const dir = (e.path || '').replace(/\/[^/]+$/,'').toLowerCase();
+            const base = basenameNoExt(e.title || e.path || '').toLowerCase();
+            const k = `${base}|${dir}`;
+            if(previewByBaseDir.has(k)) e.preview = previewByBaseDir.get(k);
+            else e.preview = previewPathFromItemPath(e.path) || null;
+          }
+          finalMap.set(norm, e);
+        } else {
+          const existing = finalMap.get(norm);
+          if(!existing.preview && e.preview) existing.preview = e.preview;
+          if(!existing.bucket && e.bucket) existing.bucket = e.bucket;
+          if((!existing.title || existing.title === '(untitled)') && e.title) existing.title = e.title;
+        }
+      }
+
+      const finalEntries = Array.from(finalMap.values());
+
+      for(const e of finalEntries){
+        if(e.path){
+          const norm = normalizePath(e.path);
+          const fallback = e.preview || previewPathFromItemPath(e.path) || null;
+          previewByPath.set(norm, fallback);
+          const dir = (e.path || '').replace(/\/[^/]+$/,'').toLowerCase();
+          const base = basenameNoExt(e.title || (e.path||'')).toLowerCase();
+          const k = `${base}|${dir}`;
+          if(!previewByBaseDir.has(k) && fallback) previewByBaseDir.set(k, fallback);
+        }
+      }
+
+      searchIndexCache = { entries: finalEntries, ts: Date.now() };
+      console.info('Search index built:', finalEntries.length);
+      return finalEntries;
+    } finally {
+      delete buildSearchIndex._building;
     }
-  }
-
-  const finalEntries = Array.from(finalMap.values());
-
-  for(const e of finalEntries){
-    if(e.path){
-      const norm = normalizePath(e.path);
-      const fallback = e.preview || previewPathFromItemPath(e.path) || null;
-      previewByPath.set(norm, fallback);
-      const dir = (e.path || '').replace(/\/[^/]+$/,'').toLowerCase();
-      const base = basenameNoExt(e.title || (e.path||'')).toLowerCase();
-      const k = `${base}|${dir}`;
-      if(!previewByBaseDir.has(k) && fallback) previewByBaseDir.set(k, fallback);
-    }
-  }
-
-  searchIndexCache = { entries: finalEntries, ts: Date.now() };
-  console.info('Search index built:', finalEntries.length);
-  return finalEntries;
+  })();
+  
+  return buildSearchIndex._building;
 }
 
 /* icon helpers */
@@ -1305,8 +1390,34 @@ function makeResumeNode(it, compact=false, showMarqueeForShows=false){
 /* ---------------- SEARCH UI & Logic ---------------- */
 function escapeHtml(s){ if(!s) return ''; return String(s).replace(/[&<>"']/g,m=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m])); }
 function shortenPath(p){ if(!p) return ''; const parts = p.split('/'); if(parts.length <= 3) return p; return '…' + parts.slice(-3).join('/'); }
-function debounce(fn, ms=200){ let t; return (...a)=>{ clearTimeout(t); t=setTimeout(()=>fn(...a), ms); }; }
-
+function debounce(func, wait, immediate) {
+  let timeout, lastCallTime = 0;
+  return function executedFunction(...args) {
+    const context = this;
+    const now = Date.now();
+    
+    // Prevent excessive calls
+    if (now - lastCallTime < wait) {
+      clearTimeout(timeout);
+      timeout = setTimeout(() => {
+        lastCallTime = Date.now();
+        func.apply(context, args);
+      }, wait);
+      return;
+    }
+    
+    lastCallTime = now;
+    clearTimeout(timeout);
+    
+    if (immediate && !timeout) {
+      func.apply(context, args);
+    } else {
+      timeout = setTimeout(() => {
+        func.apply(context, args);
+      }, wait);
+    }
+  };
+}
 function renderResults(rows, q){
   resultsPanel.innerHTML = '';
   if(!rows || rows.length === 0){
@@ -1435,61 +1546,63 @@ async function performSearch(q){
   }
 
   // ----------------- Kick off ZIM suggestions in parallel -----------------
-  try {
-    const existingZimSections = resultsPanel.querySelectorAll('[data-zim-section]');
-    existingZimSections.forEach(n=>n.remove());
+  if (!DISABLE_ZIM) {
+    try {
+      const existingZimSections = resultsPanel.querySelectorAll('[data-zim-section]');
+      existingZimSections.forEach(n=>n.remove());
 
-    // Suggest titles from ZIM (fast title-only search)
-    const zimMatches = await tryZimSuggest(term, 100);
-    //zimLoadingMarker.remove();
+      // Suggest titles from ZIM (fast title-only search)
+      const zimMatches = await tryZimSuggest(term, 100);
+      //zimLoadingMarker.remove();
 
-    if (zimMatches && zimMatches.length) {
-      debugLog('ZIM matches received:', zimMatches.length);
+      if (zimMatches && zimMatches.length) {
+        debugLog('ZIM matches received:', zimMatches.length);
 
-      // Convert ZIM matches to the same object shape as media results so renderResults can handle them
-      const zimItems = zimMatches.map(z => ({
-        title: z.title || '(untitled)',
-        path: z.path || `/zimreader.html?zim=${encodeURIComponent(activeZimPath||'')}&entry=${encodeURIComponent(z.path||'')}`,
-        bucket: 'ZIM',
-        subtype: 'zim',
-        preview: z.preview || null,
-        raw: z.raw || z
-      }));
+        // Convert ZIM matches to the same object shape as media results so renderResults can handle them
+        const zimItems = zimMatches.map(z => ({
+          title: z.title || '(untitled)',
+          path: z.path || `/zimreader.html?zim=${encodeURIComponent(activeZimPath||'')}&entry=${encodeURIComponent(z.path||'')}`,
+          bucket: 'ZIM',
+          subtype: 'zim',
+          preview: z.preview || null,
+          raw: z.raw || z
+        }));
 
-      const seen = new Map();
-      function keyFor(it){
-        const t = (it.title||it.path||'').toString().toLowerCase().trim();
-        return t;
+        const seen = new Map();
+        function keyFor(it){
+          const t = (it.title||it.path||'').toString().toLowerCase().trim();
+          return t;
+        }
+        for(const m of mediaResults){
+          seen.set(keyFor(m), m);
+        }
+        for(const z of zimItems){
+          const k = keyFor(z);
+          if(!seen.has(k)) seen.set(k, z);
+        }
+
+        // Create combined array and sort by our score function (descending)
+        const combined = Array.from(seen.values());
+        combined.sort((a,b) => {
+          const sa = scoreFor(a), sb = scoreFor(b);
+          if(sa !== sb) return sb - sa; // higher score first
+          // fallback: prefer items whose title starts with term
+          const ta = (a.title||'').toLowerCase().startsWith(term.toLowerCase()) ? 1 : 0;
+          const tb = (b.title||'').toLowerCase().startsWith(term.toLowerCase()) ? 1 : 0;
+          if(ta !== tb) return tb - ta;
+          // fallback bucket order
+          const order = { Movies:0, Shows:1, Music:2, Gallery:3, ZIM:4, Books:5, Files:6 };
+          return (order[a.bucket]||9) - (order[b.bucket]||9);
+        });
+
+        // Re-render combined results (keeps the same row look as other items)
+        renderResults(combined, q);
+      } else {
+        debugLog('No ZIM matches for', term);
       }
-      for(const m of mediaResults){
-        seen.set(keyFor(m), m);
-      }
-      for(const z of zimItems){
-        const k = keyFor(z);
-        if(!seen.has(k)) seen.set(k, z);
-      }
-
-      // Create combined array and sort by our score function (descending)
-      const combined = Array.from(seen.values());
-      combined.sort((a,b) => {
-        const sa = scoreFor(a), sb = scoreFor(b);
-        if(sa !== sb) return sb - sa; // higher score first
-        // fallback: prefer items whose title starts with term
-        const ta = (a.title||'').toLowerCase().startsWith(term.toLowerCase()) ? 1 : 0;
-        const tb = (b.title||'').toLowerCase().startsWith(term.toLowerCase()) ? 1 : 0;
-        if(ta !== tb) return tb - ta;
-        // fallback bucket order
-        const order = { Movies:0, Shows:1, Music:2, Gallery:3, ZIM:4, Books:5, Files:6 };
-        return (order[a.bucket]||9) - (order[b.bucket]||9);
-      });
-
-      // Re-render combined results (keeps the same row look as other items)
-      renderResults(combined, q);
-    } else {
-      debugLog('No ZIM matches for', term);
+    } catch (e) {
+      console.warn('ZIM search failed', e);
     }
-  } catch (e) {
-    console.warn('ZIM search failed', e);
   }
 
   // return mediaResults immediately
@@ -1527,15 +1640,27 @@ searchInput.addEventListener('input', debounce((e) => {
   const v = e.target.value || '';
   if(!v.trim()){ resultsPanel.style.display='none'; resultsPanel.innerHTML=''; return; }
   performSearch(v);
-}, 200));
+}, 500)); // Increased from 200ms to 500ms
 
 document.addEventListener('click', (ev) => {
   if(!resultsPanel.contains(ev.target) && ev.target !== searchInput) { resultsPanel.style.display='none'; }
 });
 
 /* warm index and load resume on boot */
-(function warm(){ try{ buildPromise = buildSearchIndex(); }catch(e){ console.warn('warm failed', e); } })();
-
+(function warm(){ 
+  if (__initStarted) return;
+  __initStarted = true;
+  
+  // Delay initialization to avoid race conditions
+  setTimeout(() => {
+    try{ 
+      buildPromise = buildSearchIndex(); 
+    } catch(e){ 
+      console.warn('warm failed', e); 
+      __initStarted = false; // Allow retry on error
+    } 
+  }, 100);
+})();
 /* Initialize resume */
 (async function initResume(){
   try {
@@ -1566,21 +1691,23 @@ document.addEventListener('click', (ev) => {
 document.addEventListener('keydown', (e) => { if(e.key === 'Escape'){ resultsPanel.style.display='none'; } });
 
 /* Load ZIM bridge only if ZIM files exist */
-(async function conditionalZimLoad(){
-  try{
-    const list = await tryFetchJSON('/zim-list', 1500);
-    if(Array.isArray(list) && list.length){
-      await new Promise((res, rej)=>{
-        const s = document.createElement('script');
-        s.src = '/assets/zim-bridge.js';
-        s.async = true;
-        s.onload = res; 
-        s.onerror = ()=>{ debugLog('zim-bridge.js not found'); res(); };
-        document.head.appendChild(s);
-      });
-    }
-  }catch(e){ debugLog('ZIM check skipped', String(e)); }
-})();
+if (!DISABLE_ZIM) {
+  (async function conditionalZimLoad(){
+    try{
+      const list = await tryFetchJSON('/zim-list', 1500);
+      if(Array.isArray(list) && list.length){
+        await new Promise((res, rej)=>{
+          const s = document.createElement('script');
+          s.src = '/assets/zim-bridge.js';
+          s.async = true;
+          s.onload = res; 
+          s.onerror = ()=>{ debugLog('zim-bridge.js not found'); res(); };
+          document.head.appendChild(s);
+        });
+      }
+    }catch(e){ debugLog('ZIM check skipped', String(e)); }
+  })();
+}
 </script>
 </body>
 </html>
