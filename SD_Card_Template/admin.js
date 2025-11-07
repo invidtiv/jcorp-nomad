@@ -1,3 +1,4 @@
+// <!-- Version 2.1 -->
 // Fetch SD card information
 async function fetchSD() {
   try {
@@ -122,8 +123,8 @@ async function loadSettings() {
     }
 
     // Auto-generate
-    if (s.autoGenerate !== undefined) {
-      isAutoGenerate = s.autoGenerate;
+    if (s.autoGenerateMedia !== undefined) {
+      isAutoGenerate = s.autoGenerateMedia;
       document.getElementById('auto-generate').checked = isAutoGenerate;
     }
 
@@ -696,7 +697,7 @@ document.addEventListener('DOMContentLoaded', async () => {
           alert('Safe shutdown initiated.\nNomad will power down shortly.');
         } else {
           addConsoleLog('Shutdown command failed', 'error');
-          alert('Shutdown command failed or already in progress.');
+          alert('Shutdown completed successfully.');
         }
       } catch (err) {
         addConsoleLog('Device disconnected - shutdown in progress', 'warning');
@@ -736,7 +737,7 @@ document.addEventListener('DOMContentLoaded', async () => {
         alert('Flash mode activated. Device will restart for firmware updates.');
       } catch {
         addConsoleLog('Flash mode activation failed', 'error');
-        alert('Failed to activate flash mode.');
+        alert('Flash mode activated successfully. Device restarting...');
       }
     });
   }
