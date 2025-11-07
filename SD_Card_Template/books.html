@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<!-- Version 2.1 -->
+<!-- Version 2.2 -->
 <html lang="en">
 <head>
     <meta charset="utf-8" />
@@ -292,17 +292,17 @@
         }
 
         .overlay-title {
-            position:absolute;
-            inset:0;
-            display:flex;
-            align-items:center;
-            justify-content:center;
-            z-index:2;
-            text-align:center;
-            font-weight:700;
-            color:#06306f;
-            pointer-events:none;
-            padding:6px
+            position: absolute;
+            inset: 0;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            z-index: 2;
+            text-align: center;
+            font-weight: 700;
+            color: #06306f;
+            pointer-events: none;
+            padding: 6px;
         }
 
         .media-thumb {
@@ -1392,7 +1392,7 @@
                 card.dataset.path = pathVal;
 
                 const coverPath = item.cover || '';
-                const imgHTML = coverPath ? `<img class="media-thumb" loading="lazy" alt="${escapeHtml(item.name)}">` : '';
+                const imgHTML = coverPath ? `<img class="media-thumb" loading="lazy" src="${coverPath}" alt="${escapeHtml(item.name)}">` : '';
 
                 card.innerHTML = `
                 <div class="thumb-wrapper" aria-hidden="false">
@@ -1406,7 +1406,7 @@
                 if (img && coverPath) {
                     img.addEventListener('load', () => { img.style.opacity = '1'; if (fallback) fallback.style.display = 'none'; });
                     img.addEventListener('error', () => { img.style.display = 'none'; if (fallback) fallback.style.display = 'block'; });
-                    img.src = fileUrlDirect(coverPath);
+                    img.src = coverPath;
                 } else {
                     if (fallback) fallback.style.display = 'block';
                 }
@@ -1557,7 +1557,7 @@
         /* Action modal */
         function downloadFile(path, filename) {
             const a = document.createElement('a');
-            a.href = fileUrlDirect(path);
+            a.href = path.startsWith('/') ? path : ('/' + path);
             a.download = filename || (path ? path.split('/').pop() : 'file');
             document.body.appendChild(a);
             a.click();
