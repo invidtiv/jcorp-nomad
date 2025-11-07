@@ -1,4 +1,5 @@
 <!DOCTYPE html>
+<!-- Version 2.1 -->
 <!-- Nomad Files Page -->
 <html lang="en">
 <head>
@@ -214,52 +215,55 @@
 
   <footer>© <span id="year"></span> Jcorp Nomad</footer>
 
-  <script>
-    /* ---------- THEME ---------- */
-    const THEME_KEY = 'nomad.dark';
+<script>
+    /* Config */
+    const ROOT_PATH = '/Files';
+    const INDEX_ENDPOINT = '/api/index';
+    const MEDIA_ENDPOINT = '/media';
+
+    function fileUrl(path) { 
+      return `${MEDIA_ENDPOINT}?file=${encodeURIComponent(path)}`; 
+    }
+    /* State */
     const files = [];
     let filtered = [];
+    /* ---------- THEME ---------- */
+    const THEME_KEY = 'nomad_dark_mode';
 
     function applyThemeFlag(dark) {
-      const isDark = !!dark;
-      document.body.classList.toggle('dark', isDark);
-      try {
-        // store explicit string to avoid ambiguity when reading back
-        localStorage.setItem(THEME_KEY, isDark ? 'true' : 'false');
-      } catch (e) {
-        console.warn('Could not persist theme preference:', e);
+      if (dark) document.body.classList.add('dark');
+      else document.body.classList.remove('dark');
+
+      // Keep search readable: enforce white bg + black text (menu wants this behavior)
+      const search = document.querySelector('#searchInput');
+      if (search) {
+        try {
+          search.style.background = '#fff';
+          search.style.color = '#000';
+        } catch (e) { /* ignore style errors */ }
       }
     }
 
-    function initThemeFromStorage() {
-      const saved = localStorage.getItem(THEME_KEY);
-      if (saved !== null) {
-        applyThemeFlag(saved === 'true');
-      } else {
-        // No explicit saved preference 
-        const prefersDark = window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches;
-        applyThemeFlag(prefersDark);
-      }
-
+    (function initThemeFromStorage() {
       try {
-        if (window.matchMedia) {
-          const mq = window.matchMedia('(prefers-color-scheme: dark)');
-          const onChange = (e) => {
-            // only auto-update if user hasn't explicitly set a preference
-            if (localStorage.getItem(THEME_KEY) === null) {
-              applyThemeFlag(e.matches);
-            }
-          };
-          // use modern API when available
-          if (typeof mq.addEventListener === 'function') {
-            mq.addEventListener('change', onChange);
-          } else if (typeof mq.addListener === 'function') {
-            mq.addListener(onChange);
-          }
-        }
-      } catch (e) {
-        console.warn('Could not attach prefers-color-scheme listener:', e);
+        const saved = localStorage.getItem(THEME_KEY);
+        const isDark = (saved === 'true');
+        applyThemeFlag(isDark);
+      } catch (e) { applyThemeFlag(false); }
+    })();
+
+    // Keep pages/tabs in sync when menu toggles the key
+    window.addEventListener('storage', (ev) => {
+      if (ev.key === THEME_KEY) {
+        const dark = ev.newValue === 'true';
+        applyThemeFlag(dark);
       }
+    });
+
+    // optional helper for local toggles
+    function toggleThemeLocal() {
+      const isDark = document.body.classList.toggle('dark');
+      try { localStorage.setItem(THEME_KEY, isDark ? 'true' : 'false'); } catch (e) { }
     }
 
     function formatBytes(bytes) {
@@ -270,104 +274,55 @@
       return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
     }
 
-    async function fetchIndexWithFallback(path) {
-      const INDEX_ENDPOINT = '/api/index';
-      const FALLBACK_INDEX_FILES = ['Files.index.ndjson', '.system-index/Files.index.ndjson'];
-
-      function joinPaths(a, b) {
-        return (a || '').replace(/\/+$/, '') + '/' + (b || '').replace(/^\/+/, '');
-      }
-
-      function normalizePath(p) {
-        return '/' + (p || '').replace(/^\/+/, '').replace(/\/+$/, '');
-      }
-
-      // Try the API index first. If the API responds but the index is partial
-      // (header.count > entries.length) fall back to static index files.
-      try {
-        const apiUrl = `${INDEX_ENDPOINT}?path=${encodeURIComponent(normalizePath(path))}&_=${Date.now()}`;
-        const res = await fetch(apiUrl, { cache: 'no-store', credentials: 'same-origin' });
-
-        if (res.status === 202) {
-          // Server indicates index is being built
-          console.log('Files index is building (202 status)');
-          return { source: null, header: null, entries: [] };
-        }
-
-        if (res.ok) {
-          const text = await res.text();
-          // parseNDJSONWithHeader is defined later in the file
-          const parsed = parseNDJSONWithHeader(text);
-
-          // If no header signature, treat as unavailable to avoid trusting incorrect data
-          if (!parsed.header || !parsed.header.sig) {
-            console.warn('No index signature found in API response. Falling back to static files if available.');
-          } else {
-            // If header declares a count and we have a full set, return it.
-            if (parsed.header.count === undefined || parsed.entries.length >= parsed.header.count) {
-              if (parsed.entries && parsed.entries.length > 0) {
-                return { source: 'api', header: parsed.header, entries: parsed.entries };
-              }
-            } else {
-              // Partial index from API -> fall through to try fallback files.
-              console.warn('Partial index received from API; attempting static fallback files.');
-            }
-          }
-        }
-      } catch (e) {
-        console.error('Files index fetch error (API):', e);
-      }
-
-      // Try fallback static index files in order
-      for (const fname of FALLBACK_INDEX_FILES) {
-        try {
-          const pathAttempt = joinPaths(path, fname);
-          const url = pathAttempt + '?_=' + Date.now();
-          const res = await fetch(url, { cache: 'no-store', credentials: 'same-origin' });
-          if (!res.ok) continue;
-          const text = await res.text();
-          const parsed = parseNDJSONWithHeader(text);
-          if (parsed.entries && parsed.entries.length > 0) {
-            return { source: pathAttempt, header: parsed.header, entries: parsed.entries };
-          }
-        } catch (e) {
-          console.warn('Fallback file attempt failed:', fname, e);
-        }
-      }
-
-      // No index found at all
-      console.warn('No files index found in API or fallback files');
-      return { source: null, header: null, entries: [] };
+    function normalizePath(p) {
+      return '/' + (p || '').replace(/^\/+/, '').replace(/\/+$/, '');
     }
 
-    // Updated init function with better error handling
+    async function fetchIndex(path) {
+      const INDEX_ENDPOINT = '/api/index';
+      const url = `${INDEX_ENDPOINT}?path=${encodeURIComponent(normalizePath(path))}&_=${Date.now()}`;
+      const res = await fetch(url, { cache: 'no-store' });
+
+      if (res.status === 202) {
+        throw new Error('INDEX_BUILDING');
+      }
+
+      if (!res.ok) throw new Error('index fetch failed ' + res.status);
+      const text = await res.text();
+      const lines = text.split('\n').filter(Boolean);
+      const header = lines.length ? JSON.parse(lines[0]) : null;
+      const entries = [];
+      for (let i = 1; i < lines.length; i++) {
+        try { entries.push(JSON.parse(lines[i])); } catch (e) { }
+      }
+      return { header, entries };
+    }
+
     async function init() {
       try {
         const fileListEl = document.getElementById('fileList');
         fileListEl.innerHTML = '<li>Loading files...</li>';
 
-        // Try to fetch using the new indexing system
-        const resp = await fetchIndexWithFallback('/');
+        const resp = await fetchIndex('/Files');
         if (resp.entries && resp.entries.length > 0) {
           files.length = 0;
           files.push(...resp.entries
             .filter(Boolean)
-            .filter(obj => obj.t === 'f' || obj.type === 'f') // ensure only files
+            .filter(obj => obj.t === 'f')
             .map(obj => {
-              const path = obj.p || obj.path || (obj.n && obj.n.startsWith('/') ? obj.n : '/' + (obj.n || ''));
-              const ext = (obj.n || obj.name || '').split('.').pop().toLowerCase();
+              const path = obj.n && obj.n.startsWith('/') ? obj.n : '/' + (obj.n || '');
+              const ext = (obj.n || '').split('.').pop().toLowerCase();
               return {
-                name: obj.n || obj.name || path.split('/').pop(),
+                name: obj.n || path.split('/').pop(),
                 path: path,
                 type: ext,
-                size: obj.sz || obj.size || 0
+                size: obj.sz || 0
               };
             })
           );
         } else {
-          // fallback: try media.json or /media.json (backup for legacy system)
           try {
-            const r = await fetch('/media.json', {cache:'no-store', credentials:'same-origin'});
+            const r = await fetch('/media.json', { cache: 'no-store', credentials: 'same-origin' });
             if (r.ok) {
               const j = await r.json();
               const raw = j.files || j.Files || [];
@@ -390,200 +345,66 @@
 
         applyFilters();
       } catch (e) {
-        console.error('Error loading files:', e);
-        document.getElementById('fileList').innerHTML = '<li>Error loading files.</li>';
-      }
-    }
-    function parseNDJSONWithHeader(text) {
-      const lines = (text || '').split('\n').filter(Boolean);
-      if (lines.length === 0) return { header: null, entries: [] };
-
-      try {
-        const header = JSON.parse(lines[0]);
-        const entries = lines.slice(1).map(line => JSON.parse(line));
-        return { header, entries };
-      } catch (e) {
-        console.warn('NDJSON parse failed, trying raw lines:', e);
-        const safeJsonParse = (line) => {
-          try { return JSON.parse(line); } catch (_) { return null; }
-        };
-        return { header: null, entries: lines.map(safeJsonParse).filter(Boolean) };
-      }
-    }
-
-    async function fetchIndexWithFallback(path) {
-      const INDEX_ENDPOINT = '/api/index';
-      const FALLBACK_INDEX_FILES = ['.system-index/Files.index.ndjson', 'Files.index.ndjson'];
-
-      function joinPaths(a, b) {
-        return (a || '').replace(/\/+$/, '') + '/' + (b || '').replace(/^\/+/, '');
-      }
-
-      function normalizePath(p) {
-        return '/' + (p || '').replace(/^\/+/, '').replace(/\/+$/, '');
-      }
-
-      try {
-        const apiUrl = `${INDEX_ENDPOINT}?path=${encodeURIComponent(normalizePath(path))}&_=${Date.now()}`;
-        const res = await fetch(apiUrl, { cache:'no-store', credentials:'same-origin' });
-        if (res.ok) {
-          const text = await res.text();
-          const parsed = parseNDJSONWithHeader(text);
-
-          // Check if we have a valid header signature
-          if (!parsed.header || !parsed.header.sig) {
-            console.warn('No index signature found in files. Index may be building or missing.');
-            // Don't trigger reindex to avoid loops.
-            return { source: null, header: null, entries: [] };
-          }
-
-          if (parsed.header && parsed.header.count !== undefined && parsed.entries.length < parsed.header.count) {
-            // partial -> fallback
-          } else if (parsed.entries.length > 0) {
-            return { source: 'api', header: parsed.header, entries: parsed.entries };
-          }
-        } else if (res.status === 202) {
-          // Server is building index
-          console.log('Files index is building (202 status)');
-          return { source: null, header: null, entries: [] };
-        }
-      } catch (e) {
-        console.error('Files index fetch error:', e);
-      }
-
-      // Try fallback files
-      for (const fname of FALLBACK_INDEX_FILES) {
-        try {
-          const pathAttempt = joinPaths(path, fname);
-          const url = pathAttempt + '?_=' + Date.now();
-          const res = await fetch(url, { cache:'no-store', credentials:'same-origin' });
-          if (res.ok) {
-            const text = await res.text();
-            const parsed = parseNDJSONWithHeader(text);
-            if (parsed.entries && parsed.entries.length > 0) {
-              return { source: pathAttempt, header: parsed.header, entries: parsed.entries };
-            }
-          }
-        } catch (e) {
-          console.warn('Fallback file attempt failed:', fname, e);
-        }
-      }
-
-      // No index found at all
-      console.warn('No files index found in API or fallback files');
-      return { source: null, header: null, entries: [] };
-    }
-
-    // Updated init function with better error handling
-    async function init() {
-      try {
-        const fileListEl = document.getElementById('fileList');
-        fileListEl.innerHTML = '<li>Loading files...</li>';
-
-        // Try to fetch using the new indexing system
-        const resp = await fetchIndexWithFallback('/');
-        if (resp.entries && resp.entries.length > 0) {
-          files.length = 0;
-          files.push(...resp.entries
-            .filter(Boolean)
-            .filter(obj => obj.t === 'f' || obj.type === 'f') // ensure only files
-            .map(obj => {
-              const path = obj.p || obj.path || (obj.n && obj.n.startsWith('/') ? obj.n : '/' + (obj.n || ''));
-              const ext = (obj.n || obj.name || '').split('.').pop().toLowerCase();
-              return {
-                name: obj.n || obj.name || path.split('/').pop(),
-                path: path,
-                type: ext,
-                size: obj.sz || obj.size || 0
-              };
-            })
-          );
+        if (e.message === 'INDEX_BUILDING') {
+          document.getElementById('fileList').innerHTML = '<li>Index is building, please wait...</li>';
+          setTimeout(init, 5000);
         } else {
-          // fallback: try media.json or /media.json
-          try {
-            const r = await fetch('/media.json', {cache:'no-store', credentials:'same-origin'});
-            if (r.ok) {
-              const j = await r.json();
-              const raw = j.files || j.Files || [];
-              files.length = 0;
-              files.push(...raw.map(obj => {
-                const p = obj.path || obj.file || obj.url || ('/' + (obj.name || ''));
-                const name = obj.name || obj.title || p.split('/').pop();
-                const ext = (name.split('.').pop() || '').toLowerCase();
-                return { name, path: p, type: ext, size: obj.sz || obj.size || 0 };
-              }).filter(Boolean));
-            } else {
-              throw new Error('no fallback data');
-            }
-          } catch (e) {
-            console.error('No index available to build Files list', e);
-            fileListEl.innerHTML = '<li>No files found. The index may be building.</li>';
-            return;
-          }
+          console.error('Error loading files:', e);
+          document.getElementById('fileList').innerHTML = '<li>Error loading files.</li>';
         }
-
-        applyFilters();
-      } catch (e) {
-        console.error('Error loading files:', e);
-        document.getElementById('fileList').innerHTML = '<li>Error loading files.</li>';
       }
     }
 
     function applyFilters() {
-      const term = (searchInput.value || '').trim().toLowerCase();
-      const type = typeFilter.value;
-      filtered = files.filter(f =>
-        (term === '' || (f.name || '').toLowerCase().includes(term)) &&
-        (type === 'all' || (f.type || '').toLowerCase() === type)
-      );
-      applySort();
-    }
+      const search = document.getElementById('searchInput').value.toLowerCase();
+      const typeFilter = document.getElementById('typeFilter').value;
+      const sortBy = document.getElementById('sortSelect').value;
 
-    function applySort() {
-      const mode = sortSelect.value;
+      filtered = files.filter(file => {
+        const matchesSearch = file.name.toLowerCase().includes(search);
+        const matchesType = typeFilter === 'all' || file.type === typeFilter;
+        return matchesSearch && matchesType;
+      });
+
       filtered.sort((a, b) => {
-        if (mode === 'nameAsc') return (a.name || '').localeCompare(b.name || '');
-        if (mode === 'nameDesc') return (b.name || '').localeCompare(a.name || '');
-        if (mode === 'sizeAsc') return (a.size || 0) - (b.size || 0);
-        if (mode === 'sizeDesc') return (b.size || 0) - (a.size || 0);
-        if (mode === 'typeAsc') return (a.type || '').localeCompare(b.type || '');
-        if (mode === 'typeDesc') return (b.type || '').localeCompare(a.type || '');
-        return 0;
+        switch (sortBy) {
+          case 'nameAsc': return a.name.localeCompare(b.name);
+          case 'nameDesc': return b.name.localeCompare(a.name);
+          case 'sizeAsc': return a.size - b.size;
+          case 'sizeDesc': return b.size - a.size;
+          case 'typeAsc': return a.type.localeCompare(b.type);
+          case 'typeDesc': return b.type.localeCompare(a.type);
+          default: return 0;
+        }
       });
-      render();
+
+      renderFiles();
     }
 
-    function render() {
-      fileListEl.innerHTML = '';
-      filtered.forEach((f, i) => {
-        const li = document.createElement('li');
-        li.style.animationDelay = `${i * 50}ms`;
+    function renderFiles() {
+      const fileListEl = document.getElementById('fileList');
+      if (filtered.length === 0) {
+        fileListEl.innerHTML = '<li>No files match your criteria.</li>';
+        return;
+      }
 
-        const link = document.createElement('a');
-        // clicking a file in the menu triggers downloads. For direct clicks here:
-        // set the href to the canonical path (server serves it) and let browser download
-        link.href = f.path;
-        link.download = f.name;
-        link.textContent = f.name;
-        link.title = f.name;
-
-        const info = document.createElement('div');
-        info.className = 'file-info';
-        info.textContent = `${(f.type || '').toUpperCase()} • ${formatBytes(f.size || 0)}`;
-
-        li.appendChild(link);
-        li.appendChild(info);
-        fileListEl.appendChild(li);
-      });
+      fileListEl.innerHTML = filtered.map(file => `
+        <li>
+          <a href="${file.path.startsWith('/') ? file.path : ('/' + file.path)}" download="${file.name}">${file.name}</a>
+          <div class="file-info">${formatBytes(file.size)} • ${file.type.toUpperCase()}</div>
+        </li>
+      `).join('');
     }
 
-    searchInput.addEventListener('input', () => { clearTimeout(window.__debounce); window.__debounce = setTimeout(applyFilters, 150); });
-    typeFilter.addEventListener('change', applyFilters);
-    sortSelect.addEventListener('change', applySort);
-
-    // Boot
-    initThemeFromStorage();
-    init();
-  </script>
+    document.addEventListener('DOMContentLoaded', () => {
+      document.getElementById('year').textContent = new Date().getFullYear();
+      
+      document.getElementById('searchInput').addEventListener('input', applyFilters);
+      document.getElementById('typeFilter').addEventListener('change', applyFilters);
+      document.getElementById('sortSelect').addEventListener('change', applyFilters);
+      
+      init();
+    });
+</script>
 </body>
 </html>
