@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<!-- Version 2.1 -->
+<!-- Version 2.2 -->
 <html lang="en">
 <head>
 <meta charset="utf-8" />
@@ -1648,18 +1648,7 @@ document.addEventListener('click', (ev) => {
 
 /* warm index and load resume on boot */
 (function warm(){ 
-  if (__initStarted) return;
-  __initStarted = true;
-  
-  // Delay initialization to avoid race conditions
-  setTimeout(() => {
-    try{ 
-      buildPromise = buildSearchIndex(); 
-    } catch(e){ 
-      console.warn('warm failed', e); 
-      __initStarted = false; // Allow retry on error
-    } 
-  }, 100);
+  console.info('Page loaded - search index will build when needed');
 })();
 /* Initialize resume */
 (async function initResume(){
@@ -1677,12 +1666,6 @@ document.addEventListener('click', (ev) => {
 
     // Render immediately (fast)
     renderResume(normalized);
-
-    // After index is built, re-render so preview maps can populate thumbnails
-    if(!buildPromise) buildPromise = buildSearchIndex();
-    buildPromise.then(() => {
-      try { renderResume(normalized); } catch(e) { console.warn('post-index resume re-render failed', e); }
-    }).catch(()=>{/* ignore */});
 
   } catch(e){ console.warn('resume load fail', e); }
 })();
