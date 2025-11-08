@@ -1,4 +1,4 @@
-// <!-- Version 2.1 -->
+// <!-- Version 2.2 -->
 // Fetch SD card information
 async function fetchSD() {
   try {
@@ -143,8 +143,8 @@ async function saveSettings() {
     const wifiPassword = document.getElementById('wifi-password').value;
     
     // Validate WiFi password length
-    if (wifiPassword && wifiPassword.length < 7) {
-      alert('WiFi password must be at least 7 characters long for captive portal compatibility.');
+    if (wifiPassword && wifiPassword.length < 8) {
+      alert('WiFi password must be at least 8 characters long for captive portal compatibility.');
       return;
     }
     
@@ -291,8 +291,8 @@ function updateWiFiSettings() {
   const wifiPassword = document.getElementById('wifi-password').value;
   
   // Validate WiFi password length
-  if (wifiPassword && wifiPassword.length < 7) {
-    alert('WiFi password must be at least 7 characters long for captive portal compatibility.');
+  if (wifiPassword && wifiPassword.length < 8) {
+    alert('WiFi password must be at least 8 characters long for captive portal compatibility.');
     return;
   }
   
