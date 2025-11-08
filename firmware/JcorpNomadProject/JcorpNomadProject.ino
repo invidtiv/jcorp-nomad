@@ -1,4 +1,5 @@
-//Jcorp Nomad Project ver3.1
+// Jcorp Nomad Backend
+//<!-- Version 3.2 -->
 #include <Arduino.h>
 #define FF_USE_FASTSEEK 1
 #define SD_FREQ_KHZ 40000
@@ -1023,7 +1024,7 @@ void updateToggleStatus() {
         if (currentWifiStatus) {
             lv_obj_add_state(ui_wifi, LV_STATE_CHECKED);
             if (!lastWifiStatus) {
-                webLog("[SYSTEM] WiFi AP recovered successfully", "success");
+                webLog("[SYSTEM] WiFi AP verified successfully", "success");
             }
         } else {
             lv_obj_clear_state(ui_wifi, LV_STATE_CHECKED);
@@ -1039,7 +1040,7 @@ void updateSDStatus() {
         if (currentSDStatus) {
             lv_obj_add_state(ui_SDcard, LV_STATE_CHECKED);
             if (!lastSDStatus) {
-                webLog("[SYSTEM] SD card recovered successfully", "success");
+                webLog("[SYSTEM] SD card verified successfully", "success");
             }
         } else {
             lv_obj_clear_state(ui_SDcard, LV_STATE_CHECKED);
@@ -2194,6 +2195,10 @@ void applyRGBSettings() {
   }
 }
 void applyWiFiSettings() {
+  Serial.print("Stopping existing WiFi Access Point...");
+  WiFi.softAPdisconnect(true);  // Stop AP and clear config
+  delay(100);  // Give time for cleanup
+  
   Serial.print("Starting WiFi with SSID: ");
   Serial.println(settings.wifiSSID);
   WiFi.softAP(settings.wifiSSID.c_str(), settings.wifiPassword.c_str());
@@ -2961,7 +2966,7 @@ void setup() {
 
     Serial.begin(115200);
     delay(1000);
-    webLog("[SYSTEM] ESP32-S3 Captive Portal & SDMMC Server starting up", "info");
+    webLog("[SYSTEM] Nomad System Captive Portal & SDMMC Online", "info");
 
     // Start WiFi Access Point
     webLogf("info", "Starting WiFi Access Point with SSID: '%s'", settings.wifiSSID.c_str());
