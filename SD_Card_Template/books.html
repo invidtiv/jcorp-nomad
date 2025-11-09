@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<!-- Version 2.2 -->
+<!-- Version 2.3 -->
 <html lang="en">
 <head>
     <meta charset="utf-8" />
@@ -422,13 +422,6 @@
                 border: 0;
                 cursor: pointer
             }
-
-        footer {
-            padding: 10px;
-            text-align: center;
-            color: #666;
-            margin-bottom: var(--audio-height);
-        }
 
         /* EPUB Reader */
         .reader-container {
@@ -1090,8 +1083,6 @@
         <audio id="audioElement" preload="metadata" crossorigin="anonymous"></audio>
     </div>
 
-    <footer>© <span id="year"></span> Jcorp Nomad</footer>
-
     <script>
         /* Theme */
         const THEME_KEY = 'nomad_dark_mode';
@@ -1189,7 +1180,6 @@
         }
 
         /* DOM refs */
-        document.getElementById('year').textContent = new Date().getFullYear();
         const gridEl = document.getElementById('grid');
         const searchInput = document.getElementById('searchInput');
         const sortSelect = document.getElementById('sortSelect');
