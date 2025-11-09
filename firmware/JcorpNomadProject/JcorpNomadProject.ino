@@ -1,5 +1,5 @@
 // Jcorp Nomad Backend
-//<!-- Version 3.2 -->
+//<!-- Version 3.3 -->
 #include <Arduino.h>
 #define FF_USE_FASTSEEK 1
 #define SD_FREQ_KHZ 40000
@@ -7,8 +7,13 @@
 #include <AsyncTCP.h>
 #include <ESPAsyncWebServer.h>
 #include "FS.h"
+#define CONFIG_FATFS_EXFAT 1
 #include <SD_MMC.h>
+#ifndef SD
+#define SD SD_MMC
+#endif
 #include <DNSServer.h>
+#include "SD_Card.h"
 #include <ArduinoJson.h>
 #include <map>
 #include "Display_ST7789.h"
@@ -1455,6 +1460,16 @@ void handleRangeRequest(AsyncWebServerRequest *request) {
   else if (pLower.endsWith(".cbz")) mimeType = "application/vnd.comicbook+zip";
   else if (pLower.endsWith(".cbr")) mimeType = "application/vnd.comicbook-rar";
 
+  // Add weblog for range requests - keep it simple and clean
+  if (contentLength > 2048) { // Only log substantial content requests, not probes
+    String fileName = filePath.substring(filePath.lastIndexOf('/') + 1);
+    String logMessage = "Playing: " + fileName + " (" + humanSize(fileSize) + ")";
+    if (isMediaStream) {
+      logMessage += " [Media]";
+    }
+    webLog(logMessage, "media");
+  }
+
   if (isMediaStream && contentLength > 10000) {
     mediaStreamingActive = true;
     shutdownBackgroundTasksForStreaming(); 
@@ -1656,69 +1671,139 @@ void handleFileUpload(AsyncWebServerRequest *request) {
     request->send(200, "application/json", "{\"status\":\"Ready to upload\"}");
 }
 void handleRename(AsyncWebServerRequest *request) {
+    Serial.println("[RENAME] Request received");
+    
     if (!request->hasParam("oldname", true) || !request->hasParam("newname", true)) {
-    request->send(400, "application/json", "{\"error\":\"Missing parameters\"}");
-    return;
+        Serial.println("[RENAME] Missing parameters");
+        request->send(400, "application/json", "{\"error\":\"Missing parameters\"}");
+        return;
     }
 
     String oldName = request->getParam("oldname", true)->value();
     String newName = request->getParam("newname", true)->value();
 
+    Serial.printf("[RENAME] Attempting to rename: '%s' -> '%s'\n", oldName.c_str(), newName.c_str());
+
+    // Validation: Check if source exists
     if (!SD_MMC.exists(oldName)) {
-    request->send(404, "application/json", "{\"error\":\"Original file not found\"}");
-    return;
+        Serial.printf("[RENAME] Source file not found: %s\n", oldName.c_str());
+        request->send(404, "application/json", "{\"error\":\"Original file not found\"}");
+        return;
     }
 
+    // Validation: Check if target already exists
     if (SD_MMC.exists(newName)) {
-    request->send(409, "application/json", "{\"error\":\"Target file already exists\"}");
-    return;
+        Serial.printf("[RENAME] Target already exists: %s\n", newName.c_str());
+        request->send(409, "application/json", "{\"error\":\"Target file already exists\"}");
+        return;
     }
 
+    // Pre-rename verification: Check source accessibility
     bool wasDirectory = false;
-    File f = SD_MMC.open(oldName);
-    if (f && f.isDirectory()) wasDirectory = true;
-    if (f) f.close();
-
-    if (SD_MMC.rename(oldName, newName)) {
-        if (wasDirectory) {
-            String oldNestedName = encodeIndexName(oldName) + ".nested.ndjson";
-            webLogf("info", "File renamed: '%s' -> '%s'", oldName.c_str(), newName.c_str());
-            Serial.printf("Renaming '%s' to '%s'\n", oldName.c_str(), newName.c_str());
-            String oldNestedPath = String(INDEX_DIR) + "/" + oldNestedName;
-            if (SD_MMC.exists(oldNestedPath)) {
-                SD_MMC.remove(oldNestedPath);
-                Serial.printf("[Rename] Removed old nested index: %s\n", oldNestedPath.c_str());
-            }
-        }
-        
-        // Enqueue indexes for affected folders AND bucket roots
-        String parentOld = parentDirFromPath(oldName);
-        String parentNew = parentDirFromPath(newName);
-
-        triggerIndexingIfNeeded(parentOld);
-        if (parentNew != parentOld) triggerIndexingIfNeeded(parentNew);
-        
-        // Update bucket roots if needed
-        String bucketOld = "/";
-        int firstSlashOld = oldName.indexOf('/', 1);
-        if (firstSlashOld > 0) {
-            bucketOld = oldName.substring(0, firstSlashOld);
-            if (bucketOld != parentOld) enqueueIndexUpdateForPath(bucketOld);
-        }
-        
-        String bucketNew = "/";
-        int firstSlashNew = newName.indexOf('/', 1);
-        if (firstSlashNew > 0) {
-            bucketNew = newName.substring(0, firstSlashNew);
-            if (bucketNew != parentNew && bucketNew != bucketOld) {
-                enqueueIndexUpdateForPath(bucketNew);
-            }
-        }
-
-        request->send(200, "application/json", "{\"status\":\"Rename successful\"}");
-    } else {
-        request->send(500, "application/json", "{\"error\":\"Rename failed\"}");
+    File sourceFile = SD_MMC.open(oldName);
+    if (!sourceFile) {
+        Serial.printf("[RENAME] Cannot open source file: %s\n", oldName.c_str());
+        request->send(500, "application/json", "{\"error\":\"Cannot access source file\"}");
+        return;
     }
+    
+    if (sourceFile.isDirectory()) {
+        wasDirectory = true;
+        Serial.printf("[RENAME] Source is directory: %s\n", oldName.c_str());
+    }
+    sourceFile.close();
+
+    // Force filesystem sync before rename operation
+    delay(100);
+
+    // ATOMIC RENAME OPERATION
+    bool renameSuccess = SD_MMC.rename(oldName, newName);
+    
+    if (!renameSuccess) {
+        Serial.printf("[RENAME] SD_MMC.rename() failed: %s -> %s\n", oldName.c_str(), newName.c_str());
+        webLogf("error", "Rename failed: %s → %s", oldName.c_str(), newName.c_str());
+        request->send(500, "application/json", "{\"error\":\"Rename operation failed\"}");
+        return;
+    }
+
+    // CRITICAL: Allow SD card controller to complete operation
+    delay(150);
+
+    // VERIFICATION: Ensure rename actually worked
+    if (SD_MMC.exists(oldName)) {
+        Serial.printf("[RENAME] ERROR: Source still exists after rename: %s\n", oldName.c_str());
+        request->send(500, "application/json", "{\"error\":\"Rename verification failed - source still exists\"}");
+        return;
+    }
+    
+    if (!SD_MMC.exists(newName)) {
+        Serial.printf("[RENAME] ERROR: Target doesn't exist after rename: %s\n", newName.c_str());
+        request->send(500, "application/json", "{\"error\":\"Rename verification failed - target missing\"}");
+        return;
+    }
+
+    Serial.printf("[RENAME] Verification passed: '%s' -> '%s'\n", oldName.c_str(), newName.c_str());
+
+    // Post-rename operations (only if rename was successful and verified)
+    if (wasDirectory) {
+        String oldNestedName = encodeIndexName(oldName) + ".nested.ndjson";
+        String oldNestedPath = String(INDEX_DIR) + "/" + oldNestedName;
+        
+        webLogf("info", "%s renamed: %s → %s", wasDirectory ? "Directory" : "File", oldName.c_str(), newName.c_str());
+        Serial.printf("[RENAME] Directory renamed successfully: '%s' -> '%s'\n", oldName.c_str(), newName.c_str());
+        
+        // Clean up old nested index file if it exists
+        if (SD_MMC.exists(oldNestedPath)) {
+            delay(50); // Allow previous operations to complete
+            
+            if (SD_MMC.remove(oldNestedPath)) {
+                Serial.printf("[RENAME] Removed old nested index: %s\n", oldNestedPath.c_str());
+            } else {
+                Serial.printf("[RENAME] Warning: Failed to remove old nested index: %s\n", oldNestedPath.c_str());
+            }
+        }
+    } else {
+        Serial.printf("[RENAME] File renamed successfully: '%s' -> '%s'\n", oldName.c_str(), newName.c_str());
+    }
+    
+    // Index management - ensure filesystem is stable before triggering
+    delay(100);
+    
+    // Enqueue indexes for affected folders AND bucket roots
+    String parentOld = parentDirFromPath(oldName);
+    String parentNew = parentDirFromPath(newName);
+
+    Serial.printf("[RENAME] Triggering index updates: parentOld='%s', parentNew='%s'\n", parentOld.c_str(), parentNew.c_str());
+
+    triggerIndexingIfNeeded(parentOld);
+    if (parentNew != parentOld) {
+        triggerIndexingIfNeeded(parentNew);
+    }
+    
+    // Update bucket roots if needed
+    String bucketOld = "/";
+    int firstSlashOld = oldName.indexOf('/', 1);
+    if (firstSlashOld > 0) {
+        bucketOld = oldName.substring(0, firstSlashOld);
+        if (bucketOld != parentOld) {
+            Serial.printf("[RENAME] Enqueuing bucket update for old: %s\n", bucketOld.c_str());
+            enqueueIndexUpdateForPath(bucketOld);
+        }
+    }
+    
+    String bucketNew = "/";
+    int firstSlashNew = newName.indexOf('/', 1);
+    if (firstSlashNew > 0) {
+        bucketNew = newName.substring(0, firstSlashNew);
+        if (bucketNew != parentNew && bucketNew != bucketOld) {
+            Serial.printf("[RENAME] Enqueuing bucket update for new: %s\n", bucketNew.c_str());
+            enqueueIndexUpdateForPath(bucketNew);
+        }
+    }
+
+    // Final success response
+    Serial.printf("[RENAME] Operation completed successfully: '%s' -> '%s'\n", oldName.c_str(), newName.c_str());
+    request->send(200, "application/json", "{\"status\":\"Rename successful\"}");
 }
 
 void handleDelete(AsyncWebServerRequest *request) {
@@ -1780,6 +1865,7 @@ void handleDelete(AsyncWebServerRequest *request) {
         
         request->send(200, "application/json", "{\"status\":\"Delete successful\"}");
     } else {
+        webLogf("error", "Delete failed: %s", filename.c_str());
         request->send(500, "application/json", "{\"error\":\"Delete failed\"}");
     }
 }
@@ -1815,12 +1901,14 @@ void onUploadHandler(AsyncWebServerRequest *request, const String& filename, siz
     Serial.println("[Upload] Starting upload to: " + fullPath);
     uploadFile = SD_MMC.open(fullPath, FILE_WRITE);
     if (!uploadFile) {
+        webLogf("error", "Upload failed to open: %s", fullPath.c_str());
         Serial.println("[Upload] Failed to open: " + fullPath);
         return;
     }
     uploadPaths[request] = fullPath;
     uploadFile = SD_MMC.open(fullPath, FILE_WRITE);
     if (!uploadFile) {
+    webLogf("error", "Upload failed to open: %s", fullPath.c_str());
     Serial.println("[Upload] Failed to open: " + fullPath);
     return;
     }
@@ -1869,6 +1957,7 @@ void createSimpleUploadHandler(const String& mediaFolder, const char* endpoint) 
     Serial.println("[Upload] Starting upload to: " + fullPath);
     File f = SD_MMC.open(fullPath, FILE_WRITE);
     if (!f) {
+    webLogf("error", "Upload failed: could not open file for writing");
     Serial.println("[Upload] Failed to open file for writing");
     return;
     }
@@ -2974,25 +3063,64 @@ void setup() {
     webLogf("success", "WiFi Access Point started successfully - IP: %s", WiFi.softAPIP().toString().c_str());
   
 
-    // Initialize SD card
-    Serial.println("Initializing SD Card...");
-    if (!SD_MMC.setPins(SD_CLK_PIN, SD_CMD_PIN, SD_D0_PIN, SD_D1_PIN, SD_D2_PIN, SD_D3_PIN)) {
-            Serial.println("ERROR: SDMMC Pin configuration failed!");
-            // show error on UI, if this ever happens your kinda cooked
-            lv_obj_clear_flag(ui_MediaGen, LV_OBJ_FLAG_HIDDEN);
-            lv_textarea_set_text(ui_MediaGen, "SD Init failed: pin config");
-            lv_timer_handler();
-            return;
-        }
+// Initialize SD card with full diagnostics
+Serial.println("Initializing SD Card...");
 
-        if (!SD_MMC.begin("/sdcard", true, false, SD_FREQ_KHZ, 12)) {
-            Serial.println("ERROR: SDMMC Card initialization failed.");
-            // show error on UI
-            lv_obj_clear_flag(ui_MediaGen, LV_OBJ_FLAG_HIDDEN);
-            lv_textarea_set_text(ui_MediaGen, "SD Init failed: no card");
-            lv_timer_handler();
-            return;
-        }
+// Test basic pin setup first
+Serial.println("Setting up MMC pins...");
+if (!SD_MMC.setPins(SD_CLK_PIN, SD_CMD_PIN, SD_D0_PIN, SD_D1_PIN, SD_D2_PIN, SD_D3_PIN)) {
+    Serial.println("ERROR: SDMMC Pin configuration failed!");
+    return;
+}
+
+// Try different initialization methods
+Serial.println("Attempting SD card initialization...");
+
+// Method 1: Default parameters
+if (SD_MMC.begin()) {
+    Serial.println("SUCCESS: SD card initialized with default settings");
+} 
+// Method 2: 1-bit mode
+else if (SD_MMC.begin("/sdcard", true)) {
+    Serial.println("SUCCESS: SD card initialized in 1-bit mode");
+}
+// Method 3: Conservative frequency
+else if (SD_MMC.begin("/sdcard", false, false, SDMMC_FREQ_PROBING)) {
+    Serial.println("SUCCESS: SD card initialized with probing frequency");
+}
+// Method 4: Very conservative
+else if (SD_MMC.begin("/sdcard", true, false, SDMMC_FREQ_PROBING)) {
+    Serial.println("SUCCESS: SD card initialized with 1-bit + probing");
+}
+else {
+    Serial.println("ERROR: All SD initialization methods failed");
+    Serial.println("Checking SD card presence...");
+    
+    // Check if card is detected at all
+    if (SD_MMC.cardType() == CARD_NONE) {
+        Serial.println("No SD card detected - check physical connection");
+    } else {
+        Serial.println("SD card detected but initialization failed");
+        Serial.printf("Card Type: %d\n", SD_MMC.cardType());
+    }
+    return;
+}
+
+// If we got here, SD initialized successfully
+uint8_t cardType = SD_MMC.cardType();
+Serial.printf("SD Card Type: %d\n", cardType);
+Serial.printf("SD Card Size: %.2f GB\n", SD_MMC.cardSize() / (1024.0 * 1024.0 * 1024.0));
+
+// Test ExFAT specifically
+File testFile = SD_MMC.open("/test.txt", FILE_WRITE);
+if (testFile) {
+    testFile.println("ExFAT test");
+    testFile.close();
+    Serial.println("ExFAT write test: SUCCESS");
+    SD_MMC.remove("/test.txt");
+} else {
+    Serial.println("ExFAT write test: FAILED");
+}
 
     webLogf("success", "SD Card initialized successfully - Size: %.1f GB", (float)SD_MMC.cardSize() / (1024.0 * 1024.0 * 1024.0));
 
@@ -3740,6 +3868,7 @@ server.on(
 
       File f = SD_MMC.open(fullPath, FILE_WRITE);
       if (!f) {
+        webLogf("error", "Upload failed to open file: %s", fullPath.c_str());
         Serial.println("[Upload] Failed to open file: " + fullPath);
         request->send(500, "application/json", "{\"error\":\"Failed to open file\"}");
         return;
@@ -3836,8 +3965,10 @@ server.on("/mkdir", HTTP_POST, [](AsyncWebServerRequest *request) {
 
     // Attempt to create the directory
     if (SD_MMC.mkdir(dirName)) {
+        webLogf("info", "Directory created: %s", dirName.c_str());
         request->send(200, "text/plain", "OK");
     } else {
+        webLogf("error", "Failed to create directory: %s", dirName.c_str());
         request->send(500, "text/plain", "Failed to create directory");
     }
 });
@@ -3881,47 +4012,59 @@ server.on("^\\/Archive\\/.*$", HTTP_ANY, [](AsyncWebServerRequest *request){
 server.on("/save", HTTP_POST, [](AsyncWebServerRequest *request){
   Serial.println("[SAVE] Request received");
 
-  // Check for required POST params
   if (!request->hasParam("filename", true) || !request->hasParam("content", true)) {
-    Serial.println("[SAVE] Missing filename or content parameter");
-    return request->send(400, "text/plain", "Missing filename or content");
+    return request->send(400, "text/plain", "Missing parameters");
   }
 
-  // Get parameters (POST body)
-  const AsyncWebParameter* pFile    = request->getParam("filename", true);
-  const AsyncWebParameter* pContent = request->getParam("content", true);
+  String path = request->getParam("filename", true)->value();
+  String content = request->getParam("content", true)->value();
+  
+  // ATOMIC WRITE: Use temporary file pattern
+  String tempPath = path + ".tmp." + String(millis());
+  
+  Serial.printf("[SAVE] Atomic write: %s -> %s\n", tempPath.c_str(), path.c_str());
 
-  String path    = pFile->value();    // e.g. "/docs/config.json"
-  String content = pContent->value(); // new file text
+  // Step 1: Write to temporary file
+  File tempFile = SD_MMC.open(tempPath, FILE_WRITE);
+  if (!tempFile) {
+    return request->send(500, "text/plain", "Cannot create temp file");
+  }
 
-  Serial.printf("[SAVE] Filename: %s\n", path.c_str());
-  Serial.printf("[SAVE] Content length: %d\n", content.length());
-  // If the file exists, remove it first so we create a fresh file (avoids leftover bytes).
+  size_t bytesWritten = tempFile.write((const uint8_t*)content.c_str(), content.length());
+  tempFile.flush();
+  tempFile.close();
+  
+  // Step 2: Force filesystem sync (ESP32 specific)
+  delay(100);  // Allow OS buffer flush
+  
+  // Step 3: Verify temp file was written correctly
+  File verifyFile = SD_MMC.open(tempPath, FILE_READ);
+  if (!verifyFile || verifyFile.size() != content.length()) {
+    if (verifyFile) verifyFile.close();
+    SD_MMC.remove(tempPath);
+    return request->send(500, "text/plain", "Write verification failed");
+  }
+  verifyFile.close();
+  
+  // Step 4: Atomic rename (temp -> final)
   if (SD_MMC.exists(path)) {
-    if (!SD_MMC.remove(path)) {
-      Serial.printf("[SAVE] Warning: failed to remove existing file before writing: %s\n", path.c_str());
-      // Proceed anyway and attempt to open — but warn in logs.
-    }
+    SD_MMC.remove(path);
+    delay(50);  // Allow cleanup
+  }
+  
+  if (!SD_MMC.rename(tempPath, path)) {
+    SD_MMC.remove(tempPath);  // Cleanup temp file
+    return request->send(500, "text/plain", "Atomic rename failed");
+  }
+  
+  // Step 5: Final verification
+  delay(100);
+  if (!SD_MMC.exists(path)) {
+    return request->send(500, "text/plain", "Final verification failed");
   }
 
-  // Open a new file for writing (this creates a new file)
-  File f = SD_MMC.open(path, FILE_WRITE);
-  if (!f) {
-    Serial.printf("[SAVE] Failed to open file for writing: %s\n", path.c_str());
-    return request->send(500, "text/plain", "Failed to open " + path);
-  }
-
-  // Write exact bytes (binary-safe) and flush
-  size_t bytesWritten = f.write((const uint8_t*)content.c_str(), content.length());
-  f.flush();
-  f.close();
-
-  Serial.printf("[SAVE] Bytes written: %d\n", bytesWritten);
-
-  if (bytesWritten != content.length()) {
-    Serial.println("[SAVE] Warning: bytes written does not match content length");
-  }
-
+  Serial.printf("[SAVE] Atomic write successful: %s (%d bytes)\n", path.c_str(), content.length());
+  webLogf("info", "File saved: %s (%d bytes)", path.c_str(), content.length());
   request->send(200, "text/plain", "OK");
 });
 
@@ -3982,9 +4125,11 @@ server.on("/settings", HTTP_POST, [](AsyncWebServerRequest *request){
   if (doc.containsKey("autoGenerateMedia")) settings.autoGenerateMedia = doc["autoGenerateMedia"].as<bool>();
 
   if (saveSettings()) {
-    request->send(200, "application/json", "{\"status\":\"updated\"}");
+      webLogf("info", "Settings updated successfully");
+      request->send(200, "application/json", "{\"status\":\"updated\"}");
   } else {
-    request->send(500, "application/json", "{\"error\":\"Failed to save settings\"}");
+      webLogf("error", "Failed to save settings");
+      request->send(500, "application/json", "{\"error\":\"Failed to save settings\"}");
   }
 });
   server.on("/admin-status", HTTP_GET, [](AsyncWebServerRequest *request){
@@ -4107,9 +4252,10 @@ server.on("/settings", HTTP_POST, [](AsyncWebServerRequest *request){
   });
   // 2) Restart the device
   server.on("/restart", HTTP_POST, [](AsyncWebServerRequest *request){
+    webLogf("info", "Restart requested");
     request->send(200, "text/plain", "Rebooting...");
-    delay(100);             // let the response go out
-    ESP.restart();          // trigger a software restart
+    delay(1000);
+    ESP.restart();
   });
 
   server.on("/cpu-temp", HTTP_GET, [](AsyncWebServerRequest *request){
@@ -4327,20 +4473,22 @@ server.on("/settings", HTTP_POST, [](AsyncWebServerRequest *request){
       delete (String*)pv;
       Serial.printf("[ReindexTask] start %s\n", p.c_str());
 
-      if(p == "/" || p == "/Shows"){
-        // build Shows bucket plus root
-        buildBucketIndex("/Shows");
-        buildBucketIndex("/");
-      } else if(p == "/Music" || p.startsWith("/Music/")){
-        // For any Music path, rebuild the entire Music bucket
-        buildBucketIndex("/Music");
-      } else if(p.startsWith("/Shows/")){
-        // For any Shows path, rebuild the entire Shows bucket
-        buildBucketIndex("/Shows");
-      } else {
-        // For other top-level buckets, rebuild that bucket
-        buildBucketIndex(p);
-      }
+    if(p == "/"){
+      // Root directory - only rebuild root
+      buildBucketIndex("/");
+    } else if(p == "/Shows"){
+      // Shows bucket root - only rebuild Shows
+      buildBucketIndex("/Shows");
+    } else if(p == "/Music" || p.startsWith("/Music/")){
+      // For any Music path, rebuild the entire Music bucket
+      buildBucketIndex("/Music");
+    } else if(p.startsWith("/Shows/")){
+      // For any Shows subfolder, rebuild the entire Shows bucket
+      buildBucketIndex("/Shows");
+    } else {
+      // For other top-level buckets, rebuild that bucket
+      buildBucketIndex(p);
+    }
 
       Serial.printf("[ReindexTask] finished %s\n", p.c_str());
       vTaskDelete(NULL);
