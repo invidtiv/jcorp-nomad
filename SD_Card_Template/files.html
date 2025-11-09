@@ -1,6 +1,6 @@
 <!DOCTYPE html>
-<!-- Version 2.1 -->
 <!-- Nomad Files Page -->
+<!-- Version 2.2 -->
 <html lang="en">
 <head>
   <meta charset="UTF-8" />
@@ -149,16 +149,6 @@
       min-width: 110px;
       text-align: right;
     }
-    footer {
-      padding: 1rem;
-      text-align: center;
-      font-size: 0.9rem;
-      color: #666;
-      margin-left: -0.5rem;
-      margin-right: -0.5rem;
-      padding-left: calc(1rem + 0.5rem);
-      padding-right: calc(1rem + 0.5rem);
-    }
 
     @media (max-width: 600px) {
       body { padding: 0 0.25rem; }
@@ -171,7 +161,6 @@
       ul.file-list li { flex-direction: column; align-items: flex-start; gap: 0.5rem; padding: 0.5rem 0.75rem; }
       ul.file-list li a { max-width: 100%; white-space: normal; word-break: break-word; }
       .file-info { white-space: normal; width: 100%; text-align: left; min-width: auto; }
-      footer { padding-left: calc(1rem + 0.25rem); padding-right: calc(1rem + 0.25rem); margin-left: -0.25rem; margin-right: -0.25rem; }
     }
   </style>
 </head>
@@ -212,8 +201,6 @@
   <main>
     <ul id="fileList" class="file-list"></ul>
   </main>
-
-  <footer>© <span id="year"></span> Jcorp Nomad</footer>
 
 <script>
     /* Config */
@@ -397,7 +384,6 @@
     }
 
     document.addEventListener('DOMContentLoaded', () => {
-      document.getElementById('year').textContent = new Date().getFullYear();
       
       document.getElementById('searchInput').addEventListener('input', applyFilters);
       document.getElementById('typeFilter').addEventListener('change', applyFilters);
