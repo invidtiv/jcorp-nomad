@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<!-- Version 2.1 -->
+<!-- Version 2.2 -->
 <html lang="en">
 <head>
 <meta charset="utf-8" />
@@ -98,7 +98,6 @@
   .video-actions .cancel{background:#fff;border:1px solid #e6e9ef;color:#333}
   .video-actions #videoNextBtn{background:var(--primary);color:#fff}
 
-  footer{padding:10px;text-align:center;color:#666;font-size:0.95rem}
 
 /* marquee keyframes */
 @keyframes scroll { 0% { transform: translateX(0); } 100% { transform: translateX(-50%); } }
@@ -163,11 +162,8 @@
     </div>
   </div>
 
-  <footer>© <span id="year"></span> Jcorp Nomad</footer>
-
 <script>
 /* Basic setup */
-document.getElementById('year').textContent = new Date().getFullYear();
 
 const ROOT_PATH = '/Shows';
 const INDEX_ENDPOINT = '/api/index';
@@ -334,9 +330,6 @@ function applyThemeFlag(dark){
       resumeBanner.style.color = dark ? '#eaf6ff' : '#111';
     }
 
-    // Footer color
-    const footer = document.querySelector('footer');
-    if(footer) footer.style.color = dark ? '#9fb0c6' : '#666';
   } catch(e){
     console.warn('applyThemeFlag error', e);
   }
@@ -1112,15 +1105,163 @@ let _meta=null, _pause=null, _seek=null, _ended=null;
 function detachVideoListeners(){ if(_meta) videoPlayer.removeEventListener('loadedmetadata', _meta); if(_pause) videoPlayer.removeEventListener('pause', _pause); if(_seek) videoPlayer.removeEventListener('seeked', _seek); if(_ended) videoPlayer.removeEventListener('ended', _ended); _meta=_pause=_seek=_ended=null; }
 function attachVideoListeners(){ detachVideoListeners(); _meta = ()=>{ videoPlayer.removeEventListener('loadedmetadata', _meta); startAutosave(); }; _pause = ()=>{ saveNow(); }; _seek = ()=>{ saveNow(); }; _ended = ()=>{ handleEpisodeEnded(); }; videoPlayer.addEventListener('loadedmetadata', _meta); videoPlayer.addEventListener('pause', _pause); videoPlayer.addEventListener('seeked', _seek); videoPlayer.addEventListener('ended', _ended); }
 
-function startStallWatcher(player, src){
-  clearTimeout(stallTimer); stallRetries = 0;
-  function schedule(){ clearTimeout(stallTimer); stallTimer = setTimeout(()=>{ if(!player.paused && player.readyState < 3 && stallRetries < 2){ stallRetries++; player.src = `${src}${src.includes('?') ? '&' : '?'}_=${Date.now()}`; player.load(); try{ player.currentTime = player.currentTime; }catch(e){} player.play().catch(()=>{}); schedule(); } }, 8000); }
-  const once = function once(){ player.removeEventListener('playing', once); schedule(); };
-  player.addEventListener('playing', once);
-  player.addEventListener('pause', ()=> clearTimeout(stallTimer));
-  player.addEventListener('ended', ()=> clearTimeout(stallTimer));
+// Enhanced stall watcher with 30-second intervals and stronger recovery
+function startStallWatcher(player, src) {
+  clearTimeout(stallTimer);
+  stallRetries = 0;
+  
+  let lastCurrentTime = 0;
+  let lastTimeCheck = Date.now();
+  let stallCheckInterval = null;
+  let consecutiveStalls = 0;
+  
+  function cleanupStallWatcher() {
+    clearTimeout(stallTimer);
+    if (stallCheckInterval) {
+      clearInterval(stallCheckInterval);
+      stallCheckInterval = null;
+    }
+  }
+  
+  function isPlayerStalled() {
+    if (player.paused || player.ended) return false;
+    
+    // Check if playback position hasn't advanced
+    const currentTime = player.currentTime;
+    const now = Date.now();
+    const timeDiff = now - lastTimeCheck;
+    
+    // If more than 5 seconds have passed and currentTime hasn't changed
+    if (timeDiff > 5000 && currentTime === lastCurrentTime) {
+      return true;
+    }
+    
+    // Check readyState - if trying to play but not ready
+    if (!player.paused && player.readyState < HTMLMediaElement.HAVE_CURRENT_DATA) {
+      return true;
+    }
+    
+    // Check if buffered regions are empty or far behind current time
+    if (player.buffered.length > 0) {
+      const bufferedEnd = player.buffered.end(player.buffered.length - 1);
+      if (currentTime > bufferedEnd + 30) {
+        return true;
+      }
+    }
+    
+    return false;
+  }
+  
+  function attemptRecovery() {
+    console.warn(`[StallWatcher] Attempting recovery (retry ${stallRetries + 1})`);
+    
+    const currentTime = player.currentTime;
+    stallRetries++;
+    consecutiveStalls++;
+    
+    // Progressive recovery strategies
+    if (consecutiveStalls === 1) {
+      // First try: just reload and resume
+      player.load();
+      player.addEventListener('loadeddata', () => {
+        player.currentTime = currentTime;
+        player.play().catch(e => console.warn('Recovery play failed:', e));
+      }, { once: true });
+      
+    } else if (consecutiveStalls === 2) {
+      // Second try: force new request with cache busting
+      const newSrc = `${src}${src.includes('?') ? '&' : '?'}_retry=${Date.now()}`;
+      player.src = newSrc;
+      player.load();
+      player.addEventListener('loadeddata', () => {
+        player.currentTime = currentTime;
+        player.play().catch(e => console.warn('Recovery play failed:', e));
+      }, { once: true });
+      
+    } else if (consecutiveStalls >= 3) {
+      // Third+ try: full reset with different approach
+      player.removeAttribute('src');
+      setTimeout(() => {
+        const newSrc = `${src}${src.includes('?') ? '&' : '?'}_reset=${Date.now()}&t=${Math.random()}`;
+        player.src = newSrc;
+        player.preload = 'auto';
+        player.load();
+        player.addEventListener('canplay', () => {
+          player.currentTime = currentTime;
+          player.play().catch(e => console.warn('Recovery play failed:', e));
+        }, { once: true });
+      }, 1000);
+    }
+  }
+  
+  function checkForStalls() {
+    if (isPlayerStalled()) {
+      console.warn('[StallWatcher] Stall detected');
+      attemptRecovery();
+    } else {
+      // Reset consecutive stalls if playback is healthy
+      if (consecutiveStalls > 0 && player.currentTime > lastCurrentTime) {
+        console.log('[StallWatcher] Playback recovered');
+        consecutiveStalls = 0;
+      }
+    }
+    
+    lastCurrentTime = player.currentTime;
+    lastTimeCheck = Date.now();
+  }
+  
+  // Start monitoring every 30 seconds
+  stallCheckInterval = setInterval(checkForStalls, 30000);
+  
+  // Also check more frequently for the first few minutes
+  let quickCheckCount = 0;
+  const quickCheckInterval = setInterval(() => {
+    quickCheckCount++;
+    checkForStalls();
+    
+    // Stop quick checks after 2 minutes
+    if (quickCheckCount >= 24) { // 24 * 5 seconds = 2 minutes
+      clearInterval(quickCheckInterval);
+    }
+  }, 5000);
+  
+  // Listen for network state changes
+  player.addEventListener('stalled', () => {
+    console.warn('[StallWatcher] Stalled event fired');
+    attemptRecovery();
+  });
+  
+  player.addEventListener('waiting', () => {
+    console.warn('[StallWatcher] Waiting event fired');
+    // Don't immediately retry on waiting, but check if it persists
+    setTimeout(() => {
+      if (isPlayerStalled()) {
+        attemptRecovery();
+      }
+    }, 10000);
+  });
+  
+  player.addEventListener('error', (e) => {
+    console.error('[StallWatcher] Player error:', e);
+    attemptRecovery();
+  });
+  
+  // Clean up on these events
+  const cleanupEvents = ['ended', 'pause'];
+  cleanupEvents.forEach(eventType => {
+    player.addEventListener(eventType, cleanupStallWatcher, { once: true });
+  });
+  
+  // Reset stalls counter on successful playing
+  player.addEventListener('playing', () => {
+    console.log('[StallWatcher] Playing - resetting counters');
+    stallRetries = 0;
+    consecutiveStalls = 0;
+  });
+  
+  // Initial check after a short delay
+  setTimeout(checkForStalls, 5000);
 }
-
 /* find index: exact path first -> basename fallback */
 function findIndexForPathOrBasename(path){
   const norm = normalizePath(path);
