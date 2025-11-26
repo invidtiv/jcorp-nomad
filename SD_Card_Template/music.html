@@ -1,11 +1,10 @@
 <!DOCTYPE html>
-<!-- Version 2.1 -->
 <html lang="en">
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width,initial-scale=1" />
 <title>Nomad • Music</title>
-  
+
 <!-- Theme -->
 <script>
   (function(){
@@ -240,6 +239,18 @@
 
   .muted{color:var(--muted);font-weight:700}
   .small{font-size:0.92rem}
+  
+  /* Audio state restoration styles */
+  .player-title.restoring {
+    opacity: 0.7;
+    transition: opacity 0.3s ease;
+  }
+  
+  .audio-restoring .control {
+    opacity: 0.8;
+  }
+   
+</style>
 </style>
 </head>
 <body>
@@ -361,6 +372,134 @@ function topLevelKeyForPath(full){ const parts = normalizePath(full).split('/').
 
 function fmtTime(sec){ if(!sec||!isFinite(sec)) return '0:00'; sec=Math.floor(sec); const h=Math.floor(sec/3600), m=Math.floor((sec%3600)/60), s=sec%60; if(h) return `${h}:${String(m).padStart(2,'0')}:${String(s).padStart(2,'0')}`; return `${m}:${String(s).padStart(2,'0')}`; }
 
+
+
+/* ---------- SHARED AUDIO STATE ---------- */
+const AUDIO_STATE_KEY = 'nomad_audio_state';
+const AUDIO_STATE_TTL = 300000; // 5 minutes
+
+function saveAudioState() {
+  if (!audio.src || audio.paused || audio.currentTime < 1) return;
+  
+  // Get current track info from playlist context
+  const currentTrack = currentPlaylist && currentIndex >= 0 ? currentPlaylist[currentIndex] : null;
+  
+  // Try to get current path from audio src
+  const currentPath = currentTrack ? currentTrack.path : decodeURIComponent(audio.src.replace(/.*file=([^&]+).*/, '$1'));
+  
+  // Get proper song name
+  let songName = '';
+  if (currentTrack && (currentTrack.display || currentTrack.name)) {
+    songName = currentTrack.display || currentTrack.name;
+  } else {
+    // Fallback: use current player title or extract from path
+    songName = playerTitle.textContent;
+    if (!songName || songName === 'Not playing') {
+      const pathParts = currentPath.split('/');
+      songName = pathParts[pathParts.length - 1].replace(/\.[^/.]+$/, '').replace(/[_\.]+/g, ' ').trim();
+    }
+  }
+  
+  const state = {
+    currentPath: currentPath,
+    currentTime: audio.currentTime || 0,
+    duration: audio.duration || 0,
+    volume: audio.volume,
+    playerTitle: songName,
+    timestamp: Date.now()
+  };
+
+  try {
+    localStorage.setItem(AUDIO_STATE_KEY, JSON.stringify(state));
+    console.log('Audio state saved from music page:', { path: currentPath, time: state.currentTime, title: songName });
+  } catch(e) {
+    console.warn('Failed to save audio state:', e);
+  }
+}
+function loadAudioState() {
+  try {
+    const raw = localStorage.getItem(AUDIO_STATE_KEY);
+    if (!raw) return null;
+    
+    const state = JSON.parse(raw);
+    const age = Date.now() - (state.timestamp || 0);
+    
+    if (age > AUDIO_STATE_TTL || !state.currentPath || state.fromPage === 'music') return null;
+    
+    return state;
+  } catch(e) {
+    console.warn('Failed to load audio state:', e);
+    return null;
+  }
+}
+
+function clearAudioState() {
+  try {
+    localStorage.removeItem(AUDIO_STATE_KEY);
+  } catch(e) {}
+}
+
+async function restoreAudioStateOnMusicPage() {
+  const savedState = loadAudioState();
+  if (!savedState) return false;
+  
+  console.log('Attempting to restore audio state on music page:', savedState);
+  
+  // Find the track in current library
+  const targetTrack = allTracks.find(t => normalizePath(t.path) === normalizePath(savedState.currentPath));
+  if (!targetTrack) {
+    console.log('Saved track not found in music library');
+    clearAudioState();
+    return false;
+  }
+  
+  // Don't change the current view - just restore playback
+  try {
+    _setPlayButtonLoading(true);
+    playerTitle.textContent = targetTrack.display || targetTrack.name;
+    
+    audio.src = apiFileUrl(targetTrack.path);
+    audio.volume = savedState.volume || 1;
+    
+    const restorePlayback = () => {
+      if (savedState.currentTime > 0 && audio.duration) {
+        const seekTime = Math.min(savedState.currentTime, audio.duration - 1);
+        audio.currentTime = seekTime;
+      }
+      
+      // Auto-play the restored track
+      audio.play().then(() => {
+        console.log('Audio restored and playing on music page');
+        _setPlayButtonLoading(false);
+        
+        // Find and highlight the track in current view without changing the view
+        updatePlayingRow(targetTrack.path);
+      }).catch(e => {
+        console.log('Could not auto-resume:', e);
+        _setPlayButtonLoading(false);
+        playBtn.textContent = '▶';
+      });
+      
+      // Clear the state after successful restoration
+      clearAudioState();
+    };
+
+    if (audio.readyState >= 2) {
+      restorePlayback();
+    } else {
+      audio.addEventListener('loadeddata', restorePlayback, { once: true });
+      setTimeout(() => {
+        if (audio.readyState < 2) restorePlayback();
+      }, 1000);
+    }
+    
+    return true;
+  } catch(e) {
+    console.warn('Failed to restore audio state:', e);
+    _setPlayButtonLoading(false);
+    return false;
+  }
+}
 /* compute display context for a track path according to rules:
    - if file is directly under /Music -> show EMPTY (no context)
    - if one sub deep (e.g. /Music/playlist1/file) -> show 'playlist1'
@@ -907,6 +1046,50 @@ audio.addEventListener('loadstart', ()=> {
   _setPlayButtonLoading(true);
 });
 
+/* ---------- AUTO-SAVE AUDIO STATE ---------- */
+let stateSaveInterval;
+
+audio.addEventListener('play', () => {
+  saveAudioState();
+  if (stateSaveInterval) clearInterval(stateSaveInterval);
+  stateSaveInterval = setInterval(saveAudioState, 3000);
+});
+
+
+
+audio.addEventListener('pause', () => {
+  saveAudioState();
+  if (stateSaveInterval) clearInterval(stateSaveInterval);
+});
+
+audio.addEventListener('timeupdate', () => {
+  if (!audio.paused && audio.currentTime > 0 && Math.floor(audio.currentTime) % 5 === 0) {
+    saveAudioState();
+  }
+});
+
+window.addEventListener('beforeunload', () => {
+  if (stateSaveInterval) clearInterval(stateSaveInterval);
+  saveAudioState();
+});
+
+window.addEventListener('pagehide', () => {
+  if (stateSaveInterval) clearInterval(stateSaveInterval);
+  saveAudioState();
+});
+
+document.addEventListener('visibilitychange', () => {
+  if (document.visibilityState === 'hidden' && !audio.paused) {
+    saveAudioState();
+  }
+});
+
+document.addEventListener('click', (e) => {
+  const link = e.target.closest('a[href], button[onclick]');
+  if (link && !audio.paused && audio.currentTime > 0) {
+    setTimeout(saveAudioState, 10);
+  }
+});
 /* ---------- CONTROL WIRING ---------- */
 playBtn.addEventListener('click', ()=> {
   if(playBtn.disabled || _loadingAudio) return;
@@ -1039,8 +1222,17 @@ sortBtn.addEventListener('click', ()=> {
 });
 
 /* Playlists button navigates to playlist.html */
-viewToggleBtn.addEventListener('click', ()=> { window.location.href = 'playlist.html'; });
-
+viewToggleBtn.addEventListener('click', () => { 
+  if (!audio.paused && audio.currentTime > 0) {
+    saveAudioState();
+    // Add a small delay to ensure localStorage write completes
+    setTimeout(() => {
+      window.location.href = 'playlist.html';
+    }, 50);
+  } else {
+    window.location.href = 'playlist.html';
+  }
+});
 /* search */
 searchEl.addEventListener('input', (e)=> renderCurrentViews());
 
@@ -1183,6 +1375,17 @@ function showAllView(){
     console.error('init failed', e);
   }
 })();
+
+/* ---------- INITIALIZE AUDIO STATE RESTORATION ---------- */
+setTimeout(() => {
+  restoreAudioStateOnMusicPage().then(restored => {
+    if (restored) {
+      console.log('Audio state restored from playlist page');
+    }
+  }).catch(e => {
+    console.warn('Audio state restoration failed:', e);
+  });
+}, 500);
 
 window.addEventListener('hashchange', handleHashPlayIfPresent);
 /* Watch for theme changes at runtime */
