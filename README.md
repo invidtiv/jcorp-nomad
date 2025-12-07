@@ -207,6 +207,9 @@ favicon.ico
 - **Images:** `.jpg`
 
 ---
+## 3D Printed Case Files:
+-  [Thingiverse](https://www.thingiverse.com/thing:7223398)  
+---
 
 ## Future Plans
 
