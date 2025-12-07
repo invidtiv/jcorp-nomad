@@ -1,5 +1,6 @@
 <!DOCTYPE html>
 <!-- Nomad Files Page -->
+<!-- Version 2.3 -->
 <html lang="en">
 <head>
   <meta charset="UTF-8" />
@@ -16,11 +17,8 @@
       --radius: 8px;
       --shadow: 0 4px 12px rgba(0, 0, 0, 0.08);
     }
-    *, *::before, *::after {
-      box-sizing: border-box;
-      margin: 0;
-      padding: 0;
-    }
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    html,body{height:100%}
     body {
       font-family: Arial, sans-serif;
       background: var(--bg);
@@ -30,6 +28,19 @@
       min-height: 100vh;
       padding: 0 0.5rem;
     }
+
+    /* Dark mode  */
+    body.dark {
+      background: #07121a;
+      color: #e6eef8;
+    }
+    body.dark header { background: #052233; color: #e9f4ff; }
+    body.dark .toolbar { background: #07121a; border-bottom-color: rgba(255,255,255,0.04); }
+    body.dark .file-list li { background: #071827; box-shadow: 0 6px 18px rgba(0,0,0,0.35); color: #e6eef8; }
+    body.dark .back-btn { background: #03314a; color: #e6eef8; }
+    body.dark a { color: var(--primary); }
+    body.dark .file-info { color: #9fb6cc; }
+
     header {
       background: var(--primary);
       color: #fff;
@@ -48,10 +59,7 @@
       flex-wrap: wrap;
       gap: 0.5rem;
     }
-    header h1 {
-      font-size: 1.5rem;
-      white-space: nowrap;
-    }
+    header h1 { font-size: 1.5rem; white-space: nowrap; }
     .back-btn {
       color: #fff;
       text-decoration: none;
@@ -60,6 +68,7 @@
       border-radius: var(--radius);
       white-space: nowrap;
     }
+
     .toolbar {
       background: var(--bg);
       padding: 0.75rem 1rem;
@@ -86,6 +95,9 @@
       font-size: 0.9rem;
       min-width: 0;
     }
+    /* keep search visible  */
+    body.dark .toolbar input[type="search"] { background: #fff; color: #000; }
+
     .toolbar select {
       padding: 0.5rem 0.75rem;
       border: 1px solid #ccc;
@@ -94,6 +106,7 @@
       font-size: 0.9rem;
       min-width: 120px;
     }
+
     main {
       flex: 1;
       padding: 1rem;
@@ -101,9 +114,7 @@
       width: 100%;
       margin: 0 auto;
     }
-    ul.file-list {
-      list-style: none;
-    }
+    ul.file-list { list-style: none; padding: 0; margin: 0; }
     ul.file-list li {
       background: #fff;
       border-radius: var(--radius);
@@ -115,7 +126,11 @@
       align-items: center;
       gap: 1rem;
       word-break: break-word;
+      opacity: 0;
+      transform: translateY(10px);
+      animation: fadeInUp 0.3s forwards;
     }
+    @keyframes fadeInUp { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }
     ul.file-list li a {
       color: var(--primary);
       text-decoration: none;
@@ -134,80 +149,18 @@
       min-width: 110px;
       text-align: right;
     }
-    footer {
-      padding: 1rem;
-      text-align: center;
-      font-size: 0.9rem;
-      color: #666;
-      margin-left: -0.5rem;
-      margin-right: -0.5rem;
-      padding-left: calc(1rem + 0.5rem);
-      padding-right: calc(1rem + 0.5rem);
-    }
+
     @media (max-width: 600px) {
-      body {
-        padding: 0 0.25rem;
-      }
-      header {
-        flex-direction: column;
-        align-items: flex-start;
-        gap: 0.5rem;
-        padding-left: calc(1rem + 0.25rem);
-        padding-right: calc(1rem + 0.25rem);
-        margin-left: -0.25rem;
-        margin-right: -0.25rem;
-      }
-      header h1 {
-        white-space: normal;
-        font-size: 1.3rem;
-      }
-      .back-btn {
-        width: 100%;
-        text-align: center;
-        white-space: normal;
-      }
-      .toolbar {
-        flex-direction: column;
-        align-items: stretch;
-        justify-content: center;
-        padding-left: calc(1rem + 0.25rem);
-        padding-right: calc(1rem + 0.25rem);
-        margin-left: -0.25rem;
-        margin-right: -0.25rem;
-      }
-      .toolbar input[type="search"],
-      .toolbar select {
-        flex: none;
-        width: 100%;
-        min-width: auto;
-      }
-      main {
-        padding: 0.75rem 0.5rem;
-        width: 100%;
-      }
-      ul.file-list li {
-        flex-direction: column;
-        align-items: flex-start;
-        gap: 0.5rem;
-        padding: 0.5rem 0.75rem;
-      }
-      ul.file-list li a {
-        max-width: 100%;
-        white-space: normal;
-        word-break: break-word;
-      }
-      .file-info {
-        white-space: normal;
-        width: 100%;
-        text-align: left;
-        min-width: auto;
-      }
-      footer {
-        padding-left: calc(1rem + 0.25rem);
-        padding-right: calc(1rem + 0.25rem);
-        margin-left: -0.25rem;
-        margin-right: -0.25rem;
-      }
+      body { padding: 0 0.25rem; }
+      header { flex-direction: column; align-items: flex-start; gap: 0.5rem; padding-left: calc(1rem + 0.25rem); padding-right: calc(1rem + 0.25rem); margin-left: -0.25rem; margin-right: -0.25rem; }
+      header h1 { white-space: normal; font-size: 1.3rem; }
+      .back-btn { width: 100%; text-align: center; white-space: normal; }
+      .toolbar { flex-direction: column; align-items: stretch; justify-content: center; padding-left: calc(1rem + 0.25rem); padding-right: calc(1rem + 0.25rem); margin-left: -0.25rem; margin-right: -0.25rem; }
+      .toolbar input[type="search"], .toolbar select { flex: none; width: 100%; min-width: auto; }
+      main { padding: 0.75rem 0.5rem; width: 100%; }
+      ul.file-list li { flex-direction: column; align-items: flex-start; gap: 0.5rem; padding: 0.5rem 0.75rem; }
+      ul.file-list li a { max-width: 100%; white-space: normal; word-break: break-word; }
+      .file-info { white-space: normal; width: 100%; text-align: left; min-width: auto; }
     }
   </style>
 </head>
@@ -249,121 +202,195 @@
     <ul id="fileList" class="file-list"></ul>
   </main>
 
-  <footer>© <span id="year"></span> Jcorp Nomad</footer>
+<script>
+    /* Config */
+    const ROOT_PATH = '/Files';
+    const INDEX_ENDPOINT = '/api/index';
+    const MEDIA_ENDPOINT = '/media';
 
-  <script>
-    document.getElementById('year').textContent = new Date().getFullYear();
+    function fileUrl(path) { 
+      return `${MEDIA_ENDPOINT}?file=${encodeURIComponent(path)}`; 
+    }
+    /* State */
+    const files = [];
+    let filtered = [];
+    /* ---------- THEME ---------- */
+    const THEME_KEY = 'nomad_dark_mode';
 
-    const fileListEl = document.getElementById('fileList');
-    const searchInput = document.getElementById('searchInput');
-    const sortSelect = document.getElementById('sortSelect');
-    const typeFilter = document.getElementById('typeFilter');
+    function applyThemeFlag(dark) {
+      if (dark) document.body.classList.add('dark');
+      else document.body.classList.remove('dark');
 
-    let files = [], filtered = [];
+      // Keep search readable: enforce white bg + black text (menu wants this behavior)
+      const search = document.querySelector('#searchInput');
+      if (search) {
+        try {
+          search.style.background = '#fff';
+          search.style.color = '#000';
+        } catch (e) { /* ignore style errors */ }
+      }
+    }
+
+    (function initThemeFromStorage() {
+      try {
+        const saved = localStorage.getItem(THEME_KEY);
+        const isDark = (saved === 'true');
+        applyThemeFlag(isDark);
+      } catch (e) { applyThemeFlag(false); }
+    })();
+
+    // Keep pages/tabs in sync when menu toggles the key
+    window.addEventListener('storage', (ev) => {
+      if (ev.key === THEME_KEY) {
+        const dark = ev.newValue === 'true';
+        applyThemeFlag(dark);
+      }
+    });
+
+    // optional helper for local toggles
+    function toggleThemeLocal() {
+      const isDark = document.body.classList.toggle('dark');
+      try { localStorage.setItem(THEME_KEY, isDark ? 'true' : 'false'); } catch (e) { }
+    }
 
     function formatBytes(bytes) {
-      if (bytes === 0) return '0 B';
+      if (bytes === 0) return '0 Bytes';
       const k = 1024;
-      const sizes = ['B', 'KB', 'MB', 'GB', 'TB'];
+      const sizes = ['Bytes', 'KB', 'MB', 'GB'];
       const i = Math.floor(Math.log(bytes) / Math.log(k));
-      return parseFloat((bytes / Math.pow(k, i)).toFixed(1)) + ' ' + sizes[i];
+      return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
+    }
+
+    function normalizePath(p) {
+      return '/' + (p || '').replace(/^\/+/, '').replace(/\/+$/, '');
+    }
+
+    async function fetchIndex(path) {
+      const INDEX_ENDPOINT = '/api/index';
+      const url = `${INDEX_ENDPOINT}?path=${encodeURIComponent(normalizePath(path))}&_=${Date.now()}`;
+      const res = await fetch(url, { cache: 'no-store' });
+
+      if (res.status === 202) {
+        throw new Error('INDEX_BUILDING');
+      }
+
+      if (!res.ok) throw new Error('index fetch failed ' + res.status);
+      const text = await res.text();
+      const lines = text.split('\n').filter(Boolean);
+      const header = lines.length ? JSON.parse(lines[0]) : null;
+      const entries = [];
+      for (let i = 1; i < lines.length; i++) {
+        try { entries.push(JSON.parse(lines[i])); } catch (e) { }
+      }
+      return { header, entries };
     }
 
     async function init() {
       try {
-        const res = await fetch('/media.json');
-        const json = await res.json();
-        files = (json.files || []).map(f => {
-          const ext = f.file.split('.').pop().toLowerCase();
-          return { name: f.name, path: f.file.startsWith('/') ? f.file : '/' + f.file, type: ext, size: 0 };
-        });
-                
-        await Promise.all(
-          files.map(async (file) => {
-            try {
-              const response = await fetch(file.path, {
-                method: 'GET',
-                headers: { 'Range': 'bytes=0-0' },
-              });
-              const len = response.headers.get('Content-Range')?.split('/')[1];
-              file.size = parseInt(len) || 0;
-            } catch {
-              file.size = 0;
+        const fileListEl = document.getElementById('fileList');
+        fileListEl.innerHTML = '<li>Loading files...</li>';
+
+        const resp = await fetchIndex('/Files');
+        if (resp.entries && resp.entries.length > 0) {
+          files.length = 0;
+          files.push(...resp.entries
+            .filter(Boolean)
+            .filter(obj => obj.t === 'f')
+            .map(obj => {
+              const path = obj.n && obj.n.startsWith('/') ? obj.n : '/' + (obj.n || '');
+              const ext = (obj.n || '').split('.').pop().toLowerCase();
+              return {
+                name: obj.n || path.split('/').pop(),
+                path: path,
+                type: ext,
+                size: obj.sz || 0
+              };
+            })
+          );
+        } else {
+          try {
+            const r = await fetch('/media.json', { cache: 'no-store', credentials: 'same-origin' });
+            if (r.ok) {
+              const j = await r.json();
+              const raw = j.files || j.Files || [];
+              files.length = 0;
+              files.push(...raw.map(obj => {
+                const p = obj.path || obj.file || obj.url || ('/' + (obj.name || ''));
+                const name = obj.name || obj.title || p.split('/').pop();
+                const ext = (name.split('.').pop() || '').toLowerCase();
+                return { name, path: p, type: ext, size: obj.sz || obj.size || 0 };
+              }).filter(Boolean));
+            } else {
+              throw new Error('no fallback data');
             }
-        
-            // Update UI if visible
-            if (file._infoEl) {
-              file._infoEl.textContent = `${file.type.toUpperCase()} • ${formatBytes(file.size)}`;
-            }
-          })
-        );
+          } catch (e) {
+            console.error('No index available to build Files list', e);
+            fileListEl.innerHTML = '<li>No files found. The index may be building.</li>';
+            return;
+          }
+        }
 
         applyFilters();
       } catch (e) {
-        console.error('Error loading files:', e);
-        fileListEl.innerHTML = '<li>Error loading files.</li>';
+        if (e.message === 'INDEX_BUILDING') {
+          document.getElementById('fileList').innerHTML = '<li>Index is building, please wait...</li>';
+          setTimeout(init, 5000);
+        } else {
+          console.error('Error loading files:', e);
+          document.getElementById('fileList').innerHTML = '<li>Error loading files.</li>';
+        }
       }
     }
 
     function applyFilters() {
-      const term = searchInput.value.trim().toLowerCase();
-      const type = typeFilter.value;
-      filtered = files.filter(f => f.name.toLowerCase().includes(term) && (type === 'all' || f.type === type));
-      applySort();
-    }
+      const search = document.getElementById('searchInput').value.toLowerCase();
+      const typeFilter = document.getElementById('typeFilter').value;
+      const sortBy = document.getElementById('sortSelect').value;
 
-    function applySort() {
-      const mode = sortSelect.value;
+      filtered = files.filter(file => {
+        const matchesSearch = file.name.toLowerCase().includes(search);
+        const matchesType = typeFilter === 'all' || file.type === typeFilter;
+        return matchesSearch && matchesType;
+      });
+
       filtered.sort((a, b) => {
-        if (mode === 'nameAsc') return a.name.localeCompare(b.name);
-        if (mode === 'nameDesc') return b.name.localeCompare(a.name);
-        if (mode === 'sizeAsc') return a.size - b.size;
-        if (mode === 'sizeDesc') return b.size - a.size;
-        if (mode === 'typeAsc') return a.type.localeCompare(b.type);
-        if (mode === 'typeDesc') return b.type.localeCompare(a.type);
-        return 0;
+        switch (sortBy) {
+          case 'nameAsc': return a.name.localeCompare(b.name);
+          case 'nameDesc': return b.name.localeCompare(a.name);
+          case 'sizeAsc': return a.size - b.size;
+          case 'sizeDesc': return b.size - a.size;
+          case 'typeAsc': return a.type.localeCompare(b.type);
+          case 'typeDesc': return b.type.localeCompare(a.type);
+          default: return 0;
+        }
       });
-      render();
+
+      renderFiles();
     }
 
-    function render() {
-      fileListEl.innerHTML = '';
-      filtered.forEach(f => {
-        const li = document.createElement('li');
-    
-        const link = document.createElement('a');
-        link.href = f.path;
-        link.download = f.name;
-        link.textContent = f.name;
-        link.title = f.name;
-    
-        const info = document.createElement('div');
-        info.className = 'file-info';
-        const sizeKnown = typeof f.size === 'number' && f.size > 0;
-        info.textContent = sizeKnown
-          ? `${f.type.toUpperCase()} • ${formatBytes(f.size)}`
-          : `${f.type.toUpperCase()} • …`;
-    
-        f._infoEl = info;
-    
-        li.appendChild(link);
-        li.appendChild(info);
-        fileListEl.appendChild(li);
-      });
+    function renderFiles() {
+      const fileListEl = document.getElementById('fileList');
+      if (filtered.length === 0) {
+        fileListEl.innerHTML = '<li>No files match your criteria.</li>';
+        return;
+      }
+
+      fileListEl.innerHTML = filtered.map(file => `
+        <li>
+        <a href="/Files/${file.name}" download="${file.name}">${file.name}</a>
+          <div class="file-info">${formatBytes(file.size)} • ${file.type.toUpperCase()}</div>
+        </li>
+      `).join('');
     }
 
-
-    searchInput.addEventListener('input', () => {
-      applyFilters();
+    document.addEventListener('DOMContentLoaded', () => {
+      
+      document.getElementById('searchInput').addEventListener('input', applyFilters);
+      document.getElementById('typeFilter').addEventListener('change', applyFilters);
+      document.getElementById('sortSelect').addEventListener('change', applyFilters);
+      
+      init();
     });
-    typeFilter.addEventListener('change', () => {
-      applyFilters();
-    });
-    sortSelect.addEventListener('change', () => {
-      applySort();
-    });
-
-    init();
-  </script>
+</script>
 </body>
 </html>
