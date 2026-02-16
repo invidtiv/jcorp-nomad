@@ -1,0 +1,579 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Comic Reader</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
+            background: #1a1a1a;
+            color: #fff;
+            overflow-x: hidden;
+        }
+
+        body.light {
+            background: #f5f5f5;
+            color: #000;
+        }
+
+        #header {
+            position: fixed;
+            top: 0;
+            left: 0;
+            right: 0;
+            background: rgba(0, 0, 0, 0.9);
+            padding: 15px 20px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            z-index: 100;
+            transition: transform 0.3s;
+        }
+
+        body.light #header {
+            background: rgba(255, 255, 255, 0.95);
+            box-shadow: 0 2px 5px rgba(0,0,0,0.1);
+        }
+
+        #header.hidden {
+            transform: translateY(-100%);
+        }
+
+        #comic-title {
+            font-size: 18px;
+            font-weight: 600;
+        }
+
+        #back-btn {
+            background: #2196F3;
+            color: white;
+            border: none;
+            padding: 8px 16px;
+            border-radius: 5px;
+            cursor: pointer;
+            text-decoration: none;
+            display: inline-block;
+        }
+
+        #comic-container {
+            width: 100%;
+            min-height: 100vh;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            padding-top: 60px;
+        }
+
+        #comic-container.webtoon {
+            padding: 60px 0 0 0;
+        }
+
+        #comic-container.single-page {
+            padding: 60px 20px 100px 20px;
+            justify-content: center;
+            min-height: 100vh;
+        }
+
+        #comic-container.dual-page {
+            padding: 60px 20px 100px 20px;
+            justify-content: center;
+            min-height: 100vh;
+        }
+
+        .comic-page {
+            max-width: 100%;
+            height: auto;
+            display: block;
+        }
+
+        #comic-container.webtoon .comic-page {
+            margin-bottom: 0;
+            width: 100%;
+        }
+
+        #comic-container.single-page .comic-page {
+            max-height: calc(100vh - 200px);
+            object-fit: contain;
+        }
+
+        #comic-container.dual-page .comic-page {
+            max-height: calc(100vh - 200px);
+            max-width: 48%;
+            object-fit: contain;
+            display: inline-block;
+            margin: 0 1%;
+        }
+
+        #loading {
+            position: fixed;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            background: rgba(0, 0, 0, 0.9);
+            padding: 20px 40px;
+            border-radius: 8px;
+            font-size: 18px;
+            z-index: 1000;
+        }
+
+        #error {
+            position: fixed;
+            top: 80px;
+            left: 50%;
+            transform: translateX(-50%);
+            background: #d32f2f;
+            padding: 15px 30px;
+            border-radius: 8px;
+            font-size: 16px;
+            z-index: 1000;
+            display: none;
+        }
+
+        #controls {
+            position: fixed;
+            bottom: 20px;
+            left: 50%;
+            transform: translateX(-50%);
+            background: rgba(0, 0, 0, 0.9);
+            padding: 15px 30px;
+            border-radius: 8px;
+            display: flex;
+            gap: 15px;
+            align-items: center;
+            z-index: 100;
+            transition: transform 0.3s;
+        }
+
+        body.light #controls {
+            background: rgba(255, 255, 255, 0.95);
+            box-shadow: 0 -2px 5px rgba(0,0,0,0.1);
+        }
+
+        #controls.hidden {
+            transform: translate(-50%, 150%);
+        }
+
+        button {
+            background: #2196F3;
+            color: white;
+            border: none;
+            padding: 10px 20px;
+            border-radius: 5px;
+            cursor: pointer;
+            font-size: 14px;
+        }
+
+        button:hover {
+            background: #1976D2;
+        }
+
+        button:disabled {
+            background: #555;
+            cursor: not-allowed;
+            opacity: 0.5;
+        }
+
+        select {
+            background: #333;
+            color: white;
+            border: 1px solid #555;
+            padding: 8px 12px;
+            border-radius: 5px;
+            cursor: pointer;
+        }
+
+        body.light select {
+            background: white;
+            color: black;
+            border: 1px solid #ccc;
+        }
+
+        #page-info {
+            font-size: 16px;
+            min-width: 80px;
+            text-align: center;
+        }
+
+        #settings-btn {
+            background: #666;
+        }
+
+        #settings-btn:hover {
+            background: #888;
+        }
+
+        #settings-panel {
+            position: fixed;
+            top: 60px;
+            right: 20px;
+            background: rgba(0, 0, 0, 0.95);
+            padding: 20px;
+            border-radius: 8px;
+            z-index: 99;
+            display: none;
+            min-width: 250px;
+        }
+
+        body.light #settings-panel {
+            background: rgba(255, 255, 255, 0.98);
+            box-shadow: 0 2px 10px rgba(0,0,0,0.2);
+        }
+
+        #settings-panel.visible {
+            display: block;
+        }
+
+        .setting-row {
+            margin-bottom: 15px;
+        }
+
+        .setting-row label {
+            display: block;
+            margin-bottom: 5px;
+            font-size: 14px;
+        }
+
+        .setting-row select,
+        .setting-row input {
+            width: 100%;
+        }
+    </style>
+</head>
+<body>
+    <div id="header">
+        <a href="books.html" id="back-btn">← Back</a>
+        <div id="comic-title">Comic Reader</div>
+        <button id="settings-btn" onclick="toggleSettings()">⚙️ Settings</button>
+    </div>
+
+    <div id="settings-panel">
+        <div class="setting-row">
+            <label>Reading Mode:</label>
+            <select id="reading-mode" onchange="changeReadingMode()">
+                <option value="webtoon">Webtoon (Scroll)</option>
+                <option value="single-page">Single Page</option>
+                <option value="dual-page">Dual Page</option>
+            </select>
+        </div>
+        <div class="setting-row">
+            <label>Theme:</label>
+            <select id="theme" onchange="changeTheme()">
+                <option value="dark">Dark</option>
+                <option value="light">Light</option>
+            </select>
+        </div>
+    </div>
+
+    <div id="loading">Loading comic...</div>
+    <div id="error"></div>
+    
+    <div id="comic-container" class="webtoon"></div>
+    
+    <div id="controls">
+        <button id="prev-btn" onclick="previousPage()">← Previous</button>
+        <span id="page-info">Page 1</span>
+        <button id="next-btn" onclick="nextPage()">Next →</button>
+    </div>
+
+    <script>
+        let comicPath = '';
+        let currentPage = 0;
+        let loadedPages = 0;
+        let isLoading = false;
+        let endReached = false;
+        let readingMode = 'webtoon';
+        let hideTimer = null;
+
+        function showLoading() {
+            document.getElementById('loading').style.display = 'block';
+        }
+
+        function hideLoading() {
+            document.getElementById('loading').style.display = 'none';
+        }
+
+        function showError(msg) {
+            const errorEl = document.getElementById('error');
+            errorEl.textContent = msg;
+            errorEl.style.display = 'block';
+            setTimeout(() => {
+                errorEl.style.display = 'none';
+            }, 3000);
+        }
+
+        function updatePageInfo() {
+            document.getElementById('page-info').textContent = `Page ${currentPage + 1}`;
+        }
+
+        function updateButtons() {
+            document.getElementById('prev-btn').disabled = currentPage === 0;
+            document.getElementById('next-btn').disabled = endReached && currentPage >= loadedPages - 1;
+        }
+
+        function getPageUrl(pageNum) {
+            const paddedNum = String(pageNum).padStart(5, '0');
+            return `${comicPath}/${paddedNum}[HQ].jpg`;
+        }
+
+        function getPageUrlAlt(pageNum) {
+            const paddedNum = String(pageNum).padStart(5, '0');
+            return `${comicPath}/${paddedNum}.jpg`;
+        }
+
+        function getPageUrlPng(pageNum) {
+            const paddedNum = String(pageNum).padStart(5, '0');
+            return `${comicPath}/${paddedNum}[HQ].png`;
+        }
+
+        function getPageUrlPngAlt(pageNum) {
+            const paddedNum = String(pageNum).padStart(5, '0');
+            return `${comicPath}/${paddedNum}.png`;
+        }
+
+        async function loadNextImage() {
+            if (isLoading || endReached) return;
+            
+            isLoading = true;
+            const pageNum = loadedPages;
+            
+            const img = new Image();
+            const container = document.getElementById('comic-container');
+            
+            let loaded = false;
+            
+            const urls = [
+                getPageUrl(pageNum),
+                getPageUrlAlt(pageNum),
+                getPageUrlPng(pageNum),
+                getPageUrlPngAlt(pageNum)
+            ];
+
+            for (const url of urls) {
+                await new Promise((resolve) => {
+                    img.onload = () => {
+                        loaded = true;
+                        img.className = 'comic-page';
+                        container.appendChild(img);
+                        loadedPages++;
+                        console.log(`Loaded page ${pageNum}: ${url}`);
+                        resolve();
+                    };
+                    img.onerror = () => resolve();
+                    img.src = url;
+                    setTimeout(() => resolve(), 2000);
+                });
+                
+                if (loaded) break;
+            }
+            
+            if (!loaded) {
+                console.log(`No more pages found at ${pageNum}`);
+                endReached = true;
+            }
+            
+            isLoading = false;
+            updateButtons();
+        }
+
+        async function loadInitialPages() {
+            showLoading();
+            
+            const initialCount = readingMode === 'webtoon' ? 5 : 3;
+            
+            for (let i = 0; i < initialCount; i++) {
+                await loadNextImage();
+                if (endReached) break;
+            }
+            
+            hideLoading();
+            
+            if (loadedPages === 0) {
+                showError('No images found in comic folder');
+            }
+        }
+
+        function nextPage() {
+            if (readingMode === 'webtoon') {
+                const container = document.getElementById('comic-container');
+                const images = container.getElementsByClassName('comic-page');
+                if (currentPage < loadedPages - 1) {
+                    currentPage++;
+                    images[currentPage].scrollIntoView({ behavior: 'smooth', block: 'start' });
+                    updatePageInfo();
+                    updateButtons();
+                }
+            } else {
+                if (currentPage < loadedPages - 1) {
+                    currentPage++;
+                    scrollToPage(currentPage);
+                } else if (!endReached) {
+                    loadNextImage().then(() => {
+                        if (loadedPages > currentPage + 1) {
+                            currentPage++;
+                            scrollToPage(currentPage);
+                        }
+                    });
+                }
+            }
+            startAutoHideTimer();
+        }
+
+        function previousPage() {
+            if (currentPage > 0) {
+                currentPage--;
+                scrollToPage(currentPage);
+            }
+            startAutoHideTimer();
+        }
+
+        function scrollToPage(pageNum) {
+            const container = document.getElementById('comic-container');
+            const images = container.getElementsByClassName('comic-page');
+            if (images[pageNum]) {
+                images[pageNum].scrollIntoView({ behavior: 'smooth', block: 'center' });
+                updatePageInfo();
+                updateButtons();
+            }
+        }
+
+        function changeReadingMode() {
+            const newMode = document.getElementById('reading-mode').value;
+            readingMode = newMode;
+            
+            const container = document.getElementById('comic-container');
+            container.className = newMode;
+            
+            if (newMode === 'webtoon') {
+                scrollToPage(currentPage);
+            } else {
+                scrollToPage(currentPage);
+            }
+            
+            saveSettings();
+        }
+
+        function changeTheme() {
+            const theme = document.getElementById('theme').value;
+            if (theme === 'light') {
+                document.body.classList.add('light');
+            } else {
+                document.body.classList.remove('light');
+            }
+            saveSettings();
+        }
+
+        function toggleSettings() {
+            const panel = document.getElementById('settings-panel');
+            panel.classList.toggle('visible');
+        }
+
+        function startAutoHideTimer() {
+            const header = document.getElementById('header');
+            const controls = document.getElementById('controls');
+            
+            header.classList.remove('hidden');
+            controls.classList.remove('hidden');
+            
+            clearTimeout(hideTimer);
+            hideTimer = setTimeout(() => {
+                header.classList.add('hidden');
+                controls.classList.add('hidden');
+            }, 3000);
+        }
+
+        function saveSettings() {
+            try {
+                const settings = {
+                    readingMode: document.getElementById('reading-mode').value,
+                    theme: document.getElementById('theme').value
+                };
+                localStorage.setItem('comic_reader_settings', JSON.stringify(settings));
+            } catch (e) {
+                console.error('Failed to save settings:', e);
+            }
+        }
+
+        function loadSettings() {
+            try {
+                const saved = localStorage.getItem('comic_reader_settings');
+                if (saved) {
+                    const settings = JSON.parse(saved);
+                    if (settings.readingMode) {
+                        document.getElementById('reading-mode').value = settings.readingMode;
+                        readingMode = settings.readingMode;
+                        document.getElementById('comic-container').className = readingMode;
+                    }
+                    if (settings.theme) {
+                        document.getElementById('theme').value = settings.theme;
+                        if (settings.theme === 'light') {
+                            document.body.classList.add('light');
+                        }
+                    }
+                }
+            } catch (e) {
+                console.error('Failed to load settings:', e);
+            }
+        }
+
+        window.addEventListener('scroll', () => {
+            const scrollPosition = window.scrollY + window.innerHeight;
+            const pageHeight = document.documentElement.scrollHeight;
+            
+            if (scrollPosition > pageHeight - 800 && !isLoading && !endReached) {
+                loadNextImage();
+            }
+            
+            startAutoHideTimer();
+        });
+
+        window.addEventListener('mousemove', () => {
+            startAutoHideTimer();
+        });
+
+        document.addEventListener('keydown', (e) => {
+            if (e.key === 'ArrowRight' || e.key === ' ') {
+                e.preventDefault();
+                nextPage();
+            } else if (e.key === 'ArrowLeft') {
+                e.preventDefault();
+                previousPage();
+            }
+        });
+
+        document.addEventListener('click', (e) => {
+            if (!e.target.closest('#settings-panel') && !e.target.closest('#settings-btn')) {
+                document.getElementById('settings-panel').classList.remove('visible');
+            }
+        });
+
+        async function init() {
+            const urlParams = new URLSearchParams(window.location.search);
+            const path = urlParams.get('path');
+            
+            if (!path) {
+                showError('No comic path specified');
+                hideLoading();
+                return;
+            }
+            
+            comicPath = path;
+            document.getElementById('comic-title').textContent = path.split('/').pop();
+            
+            loadSettings();
+            
+            await loadInitialPages();
+            
+            startAutoHideTimer();
+        }
+
+        init();
+    </script>
+</body>
+</html>

@@ -1,17 +1,12 @@
 // Jcorp Nomad Backend
 //<!-- Version 3.4 -->
 #include <Arduino.h>
-#define FF_USE_FASTSEEK 1
-#define SD_FREQ_KHZ 40000
 #include <WiFi.h>
 #include <AsyncTCP.h>
 #include <ESPAsyncWebServer.h>
-#include "FS.h"
-#define CONFIG_FATFS_EXFAT 1
-#include <SD_MMC.h>
-#ifndef SD
-#define SD SD_MMC
-#endif
+#include <SdFat.h>
+SdExFat sd;
+ExFatFile file;
 #include <DNSServer.h>
 #include "SD_Card.h"
 #include <ArduinoJson.h>
@@ -413,7 +408,59 @@ static bool isMediaFile(const String &lowerName) {
 
   return false;
 }
+static bool isComicFolder(const String &dirPath) {
+  File d = SD_MMC.open(dirPath);
+  if (!d || !d.isDirectory()) {
+    if (d) d.close();
+    return false;
+  }
+  
+  bool hasImages = false;
+  bool hasBookFiles = false;
+  int imageCount = 0;
+  
+  d.rewindDirectory();
+  File e;
+  while ((e = d.openNextFile())) {
+    if (e.isDirectory()) {
+      e.close();
+      continue;
+    }
+    
+    String name = String(e.name());
+    int lastSlash = name.lastIndexOf('/');
+    if (lastSlash >= 0) name = name.substring(lastSlash + 1);
+    name.toLowerCase();
+    
+    if (name.endsWith(".pdf") || name.endsWith(".epub") || 
+        name.endsWith(".azw3") || name.endsWith(".mobi") ||
+        name.endsWith(".mp3") || name.endsWith(".m4a") || 
+        name.endsWith(".m4b") || name.endsWith(".flac")) {
+      hasBookFiles = true;
+      e.close();
+      break;
+    }
+    
+    if (name.endsWith(".png") || name.endsWith(".jpg") || 
+        name.endsWith(".jpeg") || name.endsWith(".webp")) {
+      hasImages = true;
+      imageCount++;
+    }
+    
+    e.close();
+  }
+  
+  d.close();
+  
+  return hasImages && !hasBookFiles && imageCount >= 3;
+}
 
+static bool isBookFormat(const String &name) {
+  String lower = name;
+  lower.toLowerCase();
+  return lower.endsWith(".pdf") || lower.endsWith(".epub") || 
+         lower.endsWith(".azw3") || lower.endsWith(".mobi");
+}
 unsigned int countMediaFiles(const String &dirPath) {
   unsigned int count = 0;
 
@@ -546,22 +593,28 @@ bool writeNDIndexForDir(const String &dirPath, const String &outFilename) {
   }
   root.close();
 
-  // Determine recursion strategy based on path
+   // Determine recursion strategy based on path
   bool isRoot = (normPath == "/");
   bool isShows = (normPath == "/Shows");
-  bool isMusic = (normPath == "/Music");
-  bool isShowSubfolder = normPath.startsWith("/Shows/") && normPath.indexOf('/', 7) < 0; // e.g. /Shows/MyShow
-  bool isShowSeasonFolder = normPath.startsWith("/Shows/") && normPath.indexOf('/', 7) > 0; // e.g. /Shows/MyShow/Season1
-  bool isMusicSubfolder = normPath.startsWith("/Music/"); // any depth under /Music
-
-  int maxDepth = 10; // Default to fully recursive for all media directories.
+  bool isShowSubfolder = normPath.startsWith("/Shows/") && normPath.indexOf('/', 7) < 0;
+  bool isShowSeasonFolder = normPath.startsWith("/Shows/") && normPath.indexOf('/', 7) > 0;
+  bool isMusicSubfolder = normPath.startsWith("/Music/");
+  bool isBooks = (normPath == "/Books");
+  bool isBooksSubfolder = normPath.startsWith("/Books/") && normPath.indexOf('/', 7) < 0;
+  bool isBooksComicFolder = normPath.startsWith("/Books/") && normPath.indexOf('/', 7) > 0;
+  int maxDepth = 10;
 
   if (isRoot) {
-    maxDepth = 0; // Root should only list top-level buckets.
+    maxDepth = 0;
+  } else if (isBooks) {
+    maxDepth = 0;
+  } else if (isBooksSubfolder) {
+    maxDepth = 0;
+  } else if (isBooksComicFolder) {
+    maxDepth = 0;
   }
 
   Serial.printf("[Index] Recursion depth for '%s': %d\n", normPath.c_str(), maxDepth);
-
   // Prepass: compute signature and total count
   uint64_t sig = 0xcbf29ce484222325ULL;
   unsigned long count = 0;
@@ -583,6 +636,11 @@ bool writeNDIndexForDir(const String &dirPath, const String &outFilename) {
     // Skip system/hidden folders
     if (shouldSkipFolder(path)) {
     Serial.printf("[Index] Skipping folder: %s\n", path.c_str());
+    return;
+    }
+    
+    if (path.startsWith("/Books/") && isComicFolder(path)) {
+    Serial.printf("[Index] Detected comic folder, skipping contents: %s\n", path.c_str());
     return;
     }
 
@@ -658,6 +716,8 @@ bool writeNDIndexForDir(const String &dirPath, const String &outFilename) {
 
     // Skip system/hidden folders
     if (shouldSkipFolder(path)) return;
+    
+    if (path.startsWith("/Books/") && isComicFolder(path)) return;
 
     File d = SD_MMC.open(path);
     if (!d || !d.isDirectory()) { if (d) d.close(); return; }
@@ -699,8 +759,10 @@ bool writeNDIndexForDir(const String &dirPath, const String &outFilename) {
     size_t wlen = strlen(g_lineBuf);
     if (wlen) fout.write((const uint8_t*)g_lineBuf, wlen);
     } else {
+    bool isComic = full.startsWith("/Books/") && isComicFolder(full);
     int pos = snprintf(g_lineBuf, GLOBAL_INDEX_BUF,
-    "{\"t\":\"d\",\"n\":\"%s\",\"p\":\"%s\"}\n", escName, escPath);
+    "{\"t\":\"d\",\"n\":\"%s\",\"p\":\"%s\"%s}\n", 
+    escName, escPath, isComic ? ",\"comic\":true" : "");
     if (pos < 0) pos = 0;
     size_t wlen = strlen(g_lineBuf);
     if (wlen) fout.write((const uint8_t*)g_lineBuf, wlen);
@@ -969,7 +1031,7 @@ bool tryRecoverSDCard() {
     SD_MMC.end();          // unmount
     delay(1000);           // give hardware a breather
 
-    if (!SD_MMC.begin("/sdcard", true, false, SD_FREQ_KHZ, 12)) {
+    if (!SD_MMC.begin("/sdcard", true, false, SDMMC_FREQ_DEFAULT, 12)) {
         Serial.println("[SD] Recovery failed.");
         return false;
     }
@@ -1165,6 +1227,33 @@ File showsDir = SD.open("/Shows");
     musicDir.close();
   }
 
+  buildBucketIndex("/Books");
+  webLogf("indexing_progress", "Completed indexing Books bucket");
+  
+  File booksDir = SD.open("/Books");
+  if(booksDir){
+    while(true){
+      File b = booksDir.openNextFile();
+      if(!b) break;
+      if(b.isDirectory()){
+        String bookSubName = String(b.name());
+        int lastSlash = bookSubName.lastIndexOf('/');
+        if(lastSlash >= 0) bookSubName = bookSubName.substring(lastSlash + 1);
+        
+        String bookSubPath = "/Books/" + bookSubName;
+        
+        if (!isComicFolder(bookSubPath)) {
+          String fileToken = "Books__" + sanitizeToken(bookSubName) + ".nested.ndjson";
+          writeNDIndexForDir(bookSubPath, fileToken);
+          Serial.printf("[Index] wrote per-books-folder nested %s for %s\n", fileToken.c_str(), bookSubPath.c_str());
+        } else {
+          Serial.printf("[Index] Skipping comic folder nested index: %s\n", bookSubPath.c_str());
+        }
+      }
+      b.close();
+    }
+    booksDir.close();
+  }
   String summary = "{\n  \"generated\": true,\n  \"buckets\": {\n";
   // read index files to include counts
   File idx = SD.open(INDEX_DIR);
@@ -1263,53 +1352,90 @@ void handleOPDSBooks(AsyncWebServerRequest *request) {
       "  <link rel=\"start\" href=\""+absURL("/opds/root.xml")+"\" "
       "type=\"application/atom+xml;profile=opds-catalog;kind=navigation\"/>\n");
 
-    File dir = SD_MMC.open("/Books");
-    Serial.println("[OPDS] Opened /Books directory");
-
-    if (!dir || !dir.isDirectory()) {
-        Serial.println("[OPDS] /Books directory not found or is not a directory!");
-    }
-    while (dir && dir.isDirectory()) {
+    std::function<void(const String&)> processDir = [&](const String& dirPath) {
+      File dir = SD_MMC.open(dirPath);
+      if (!dir || !dir.isDirectory()) {
+        if (dir) dir.close();
+        return;
+      }
+      
+      dir.rewindDirectory();
+      while (true) {
         File file = dir.openNextFile();
-        if (!file) {
-            Serial.println("[OPDS] No more files in /Books");
-            break;
-        }
-
-        Serial.println(String("[OPDS] Found file: ") + file.name());
-
+        if (!file) break;
+        
+        String fullPath = String(file.name());
+        String fileName = fullPath;
+        int lastSlash = fileName.lastIndexOf('/');
+        if (lastSlash >= 0) fileName = fileName.substring(lastSlash + 1);
+        
         if (file.isDirectory()) {
-            Serial.println("[OPDS] Skipping directory");
-            continue;
+          if (isComicFolder(fullPath)) {
+            String base = fileName;
+            String safeTitle = xmlEscape(base);
+            String safeId = "urn:uuid:nomad-comic-" + slugify(base);
+            
+            String coverPath = "placeholder.jpg";
+            File comicDir = SD_MMC.open(fullPath);
+            if (comicDir && comicDir.isDirectory()) {
+              comicDir.rewindDirectory();
+              File firstImg;
+              while ((firstImg = comicDir.openNextFile())) {
+                if (!firstImg.isDirectory()) {
+                  String imgName = String(firstImg.name());
+                  imgName.toLowerCase();
+                  if (imgName.endsWith(".jpg") || imgName.endsWith(".png") || imgName.endsWith(".jpeg")) {
+                    coverPath = fullPath.substring(1) + "/" + String(firstImg.name()).substring(String(firstImg.name()).lastIndexOf('/') + 1);
+                    firstImg.close();
+                    break;
+                  }
+                }
+                firstImg.close();
+              }
+              comicDir.close();
+            }
+            
+            opdsWrite(res,"  <entry>\n"
+                          "    <title>"+safeTitle+" [Comic]</title>\n"
+                          "    <id>"+safeId+"</id>\n"
+                          "    <updated>"+rfc3339Now()+"</updated>\n"
+                          "    <link rel=\"http://opds-spec.org/image/thumbnail\" "
+                          "type=\"image/jpeg\" href=\""+absURL("/"+urlencode(coverPath))+"\"/>\n"
+                          "    <link rel=\"alternate\" "
+                          "type=\"text/html\" "
+                          "href=\"" + absURL("/comicreader.html?path=" + urlencode(fullPath)) + "\"/>\n"
+                          "  </entry>\n");
+          } else {
+            processDir(fullPath);
+          }
+          file.close();
+          continue;
         }
-
-        String fn = file.name();
-        String fnLower = fn;
+        
+        String fnLower = fileName;
         fnLower.toLowerCase();
-
+        
         if (!(fnLower.endsWith(".epub") || fnLower.endsWith(".pdf"))) {
-            Serial.println("[OPDS] Skipping non-ebook file: " + fn);
-            continue;
+          file.close();
+          continue;
         }
-
-        Serial.println("[OPDS] Processing book file: " + fn);
-
-
-        String base = fn.substring(fn.lastIndexOf('/')+1);
-        base = base.substring(0, base.lastIndexOf('.'));  
-        String safeTitle = xmlEscape(base);                 
-        String safeId    = "urn:uuid:nomad-book-" + slugify(base);  
-        String mime = fn.endsWith(".epub") ?
-                      "application/epub+zip" : "application/pdf";
-
-        // Cover (falls back to placeholder)
-        String coverPath = SD_MMC.exists("/Books/"+base+".jpg") ?
-                           "Books/"+base+".jpg" : "placeholder.jpg";
-
-        // Compute real download path
-        String ext    = fnLower.endsWith(".pdf") ? ".pdf" : ".epub";
-        String dlPath = "/Books/" + urlencode(base) + ext;
-
+        
+        String base = fileName.substring(0, fileName.lastIndexOf('.'));
+        String safeTitle = xmlEscape(base);
+        String safeId = "urn:uuid:nomad-book-" + slugify(base);
+        String mime = fnLower.endsWith(".epub") ? "application/epub+zip" : "application/pdf";
+        
+        String parentPath = fullPath.substring(0, fullPath.lastIndexOf('/'));
+        String coverPath = parentPath + "/" + base + ".jpg";
+        if (!SD_MMC.exists(coverPath)) {
+          coverPath = "placeholder.jpg";
+        } else {
+          coverPath = coverPath.substring(1);
+        }
+        
+        String ext = fnLower.endsWith(".pdf") ? ".pdf" : ".epub";
+        String dlPath = fullPath;
+        
         opdsWrite(res,"  <entry>\n"
                       "    <title>"+safeTitle+"</title>\n"
                       "    <id>"+safeId+"</id>\n"
@@ -1320,13 +1446,14 @@ void handleOPDSBooks(AsyncWebServerRequest *request) {
                       "type=\""+mime+"\" "
                       "href=\"" + absURL(dlPath) + "\"/>\n"
                       "  </entry>\n");
-
-    }
-    if (dir) {
-        dir.close();
-        Serial.println("[OPDS] Closed /Books directory");
-    }
-
+        
+        file.close();
+      }
+      
+      dir.close();
+    };
+    
+    processDir("/Books");
 
     opdsWrite(res,"</feed>");
     request->send(res);
@@ -1374,9 +1501,9 @@ void handleRangeRequest(AsyncWebServerRequest *request) {
                 filePath.c_str(), request->method(),
                 request->hasHeader("Range") ? request->header("Range").c_str() : "");
 
-  // Take SD mutex before any SD operations
+  // OPTIMIZATION: Reduce mutex timeout from 5000ms to 1000ms
   if (sdMutex) {
-    if (xSemaphoreTake(sdMutex, pdMS_TO_TICKS(5000)) != pdTRUE) {
+    if (xSemaphoreTake(sdMutex, pdMS_TO_TICKS(1000)) != pdTRUE) {
       Serial.printf("[RangeHandler] SD mutex timeout for: %s\n", filePath.c_str());
       request->send(503, "text/plain", "SD busy — retrying shortly");
       return;
@@ -1400,23 +1527,14 @@ void handleRangeRequest(AsyncWebServerRequest *request) {
   }
 
   File file = SD_MMC.open(filePath, "r");
+  releaseSd(); 
+
   if (!file) {
-    Serial.printf("[SD] open() failed for '%s' — trigger recovery\n", filePath.c_str());
+    Serial.printf("[SD] open() failed for '%s'\n", filePath.c_str());
     sdErrorFlag = true;
     sdErrorCooldownUntil = millis() + 5000;
-    releaseSd();
-    request->send(503, "text/plain", "SD error — retrying shortly");
+    request->send(503, "text/plain", "SD error");
     return;
-  if (!file) {
-    Serial.printf("[SD] open() failed for '%s' — trigger recovery\n", filePath.c_str());
-    // ADD THIS LINE HERE:
-    Serial.printf("[DEBUG] SD OPEN FAILED: Setting sdErrorFlag=true, cooldown until %lu\n", millis() + 5000);
-    sdErrorFlag = true;
-    sdErrorCooldownUntil = millis() + 5000;
-    releaseSd();
-    request->send(503, "text/plain", "SD error — retrying shortly");
-    return;
-  }
   }
 
   size_t fileSize = file.size();
@@ -1428,7 +1546,7 @@ void handleRangeRequest(AsyncWebServerRequest *request) {
     AsyncWebServerResponse *headResponse = request->beginResponse(200, "application/octet-stream", "");
     headResponse->addHeader("Accept-Ranges", "bytes");
     headResponse->addHeader("Content-Length", String(fileSize));
-    headResponse->addHeader("Cache-Control", "no-cache");
+    headResponse->addHeader("Cache-Control", "public, max-age=3600");
     headResponse->addHeader("Pragma", "no-cache");
     file.close();
     releaseSd();
@@ -1460,9 +1578,10 @@ void handleRangeRequest(AsyncWebServerRequest *request) {
     }
   }
 
-  if (openEndedRange && (endByte - startByte) > (50 * 1024 * 1024)) {
-    endByte = startByte + (50 * 1024 * 1024) - 1;
-    Serial.printf("[RangeHandler] Capping open-ended range to 50MB: %s-%s\n", 
+  // OPTIMIZATION: Increase initial chunk from 50MB to 100MB for faster buffering
+  if (openEndedRange && (endByte - startByte) > (100 * 1024 * 1024)) {
+    endByte = startByte + (100 * 1024 * 1024) - 1;
+    Serial.printf("[RangeHandler] Capping open-ended range to 100MB: %s-%s\n", 
                   humanSize(startByte).c_str(), humanSize(endByte).c_str());
   }
 
@@ -1496,8 +1615,7 @@ void handleRangeRequest(AsyncWebServerRequest *request) {
   else if (pLower.endsWith(".cbz")) mimeType = "application/vnd.comicbook+zip";
   else if (pLower.endsWith(".cbr")) mimeType = "application/vnd.comicbook-rar";
 
-  // Add weblog for range requests - keep it simple and clean
-  if (contentLength > 2048) { // Only log substantial content requests, not probes
+  if (contentLength > 2048) {
     String fileName = filePath.substring(filePath.lastIndexOf('/') + 1);
     String logMessage = "Playing: " + fileName + " (" + humanSize(fileSize) + ")";
     if (isMediaStream) {
@@ -1525,23 +1643,19 @@ void handleRangeRequest(AsyncWebServerRequest *request) {
       response->addHeader("Access-Control-Allow-Origin", "*");
       response->addHeader("Accept-Ranges", "bytes");
       response->addHeader("Content-Range", "bytes " + String(startByte) + "-" + String(endByte) + "/" + String(fileSize));
-      response->addHeader("Cache-Control", "no-cache");
+      response->addHeader("Cache-Control", "public, max-age=3600");
       request->send(response);
       free(probeBuffer);
       return;
     }
   }
 
-  // Release mutex for streaming response - file handle will manage the rest
   releaseSd();
 
-  // Use original pattern: capture file by value, let ESP32 File handle manage state
-  // The File copy constructor handles the reference properly for SD_MMC
   AsyncWebServerResponse *response = request->beginResponse(
     mimeType,
     contentLength,
     [file, startByte, contentLength](uint8_t *buffer, size_t maxLen, size_t index) mutable -> size_t {
-      // On first call, seek to start position
       if (index == 0) {
         file.seek(startByte);
       }
@@ -1562,7 +1676,6 @@ void handleRangeRequest(AsyncWebServerRequest *request) {
         return 0;
       }
 
-      // Close file when done
       if (index + bytesRead >= contentLength) {
         file.close();
       }
@@ -1577,7 +1690,7 @@ void handleRangeRequest(AsyncWebServerRequest *request) {
   response->addHeader("Accept-Ranges", "bytes");
   response->addHeader("Content-Range", "bytes " + String(startByte) + "-" + String(endByte) + "/" + String(fileSize));
   response->addHeader("Content-Length", String(contentLength));
-  response->addHeader("Cache-Control", "no-cache");
+  response->addHeader("Cache-Control", "public, max-age=3600");
   response->addHeader("Pragma", "no-cache");
   response->setCode(206);
   request->send(response);
@@ -2067,15 +2180,6 @@ void saveSdUsageToFile(uint64_t totalBytes, uint64_t usedBytes, unsigned long ts
       }
     }
   }
-
-  static unsigned long lastSaveLogMs = 0;
-  if (millis() - lastSaveLogMs >= 10000) {
-    lastSaveLogMs = millis();
-    float pct = 0.0f;
-    if (totalBytes > 0) pct = (float)usedBytes * 100.0f / (float)totalBytes;
-    Serial.printf("[SDBAR] Updated SD Usage: used=%llu total=%llu (%.1f%%)\n",
-                  (unsigned long long)usedBytes, (unsigned long long)totalBytes, pct);
-  }
 }
 
 bool loadSdUsageFromFile() {
@@ -2173,9 +2277,12 @@ void scanSDCardUsage() {
         
         cachedUsedBytes += fileSize;
         
-        if ((cachedUsedBytes - lastAnnounced) > (8ULL * 1024ULL * 1024ULL)) {
+        if ((cachedUsedBytes - lastAnnounced) > (2ULL * 1024ULL * 1024ULL * 1024ULL)) {
           sdbarDirty = true;
           lastAnnounced = cachedUsedBytes;
+          float usedGB = (float)cachedUsedBytes / (1024.0 * 1024.0 * 1024.0);
+          float totalGB = (float)cachedTotalBytes / (1024.0 * 1024.0 * 1024.0);
+          webLogf("info", "SD scan progress: %.1f GB / %.1f GB scanned", usedGB, totalGB);
         }
         
         if ((cachedUsedBytes - lastSavedBytes) > (32ULL * 1024ULL * 1024ULL)) {
@@ -2340,7 +2447,7 @@ int getConnectedUserCount() {
 }
 void sdScanTask(void* pvParameters) {
   Serial.println("[SDScan] sdScanTask starting (background)");
-  
+  webLog("[SD Scan] Starting SD card usage scan - please do not use device during this process", "warning");
   sdScanInProgress = true;
   sdScanCompleted = false;
 
@@ -2644,16 +2751,15 @@ static void spawnIndexBuild(const String &dirPath, const String &outName) {
   // Single-build task: used only when spawnIndexBuild creates a dedicated task.
 }
 void storageMonitorTask(void *param) {
+    webLog("[StorageMonitor] Task started", "info");
     while (true) {
-        // should shut down to free resources for media streaming
         if (shutdownBackgroundTasks) {
-            Serial.println("[StorageMonitor] Shutting down to prioritize media streaming");
+            webLog("[StorageMonitor] Shutting down to prioritize media streaming", "warning");
             storageMonitorTaskHandle = nullptr;
             vTaskDelete(NULL);
             return;
         }
 
-        // Protect SD operations with mutex
         if (sdMutex && xSemaphoreTake(sdMutex, pdMS_TO_TICKS(1000)) == pdTRUE) {
             uint64_t total = SD_MMC.totalBytes();
             uint64_t used = SD_MMC.usedBytes();
@@ -2661,11 +2767,9 @@ void storageMonitorTask(void *param) {
             
             float percent = (float)used / (float)total * 100.0f;
             sdbarDirty = true;
-        } else {
-            Serial.println("[StorageMonitor] Could not acquire SD mutex, skipping this cycle");
         }
 
-        int delayMs = mediaStreamingActive ? 30000 : 10000; // 30s vs 10s
+        int delayMs = mediaStreamingActive ? 30000 : 10000;
         vTaskDelay(pdMS_TO_TICKS(delayMs));
     }
 }
@@ -3721,6 +3825,7 @@ Serial.println("SD Card initialized successfully!");
     server.on("/gallery.html", HTTP_GET, [](AsyncWebServerRequest *request) { serveProtectedFile(request, "/gallery.html"); });
     server.on("/files.html", HTTP_GET, [](AsyncWebServerRequest *request) { serveProtectedFile(request, "/files.html"); });
     server.on("/filebrowser.html", HTTP_GET, [](AsyncWebServerRequest *request) { serveProtectedFile(request, "/filebrowser.html"); });
+    server.on("/comics.html", HTTP_GET, [](AsyncWebServerRequest *request) { serveProtectedFile(request, "/comics.html"); });
     // Path redirects
     server.on("/movies", HTTP_GET, [](AsyncWebServerRequest *request) { serveProtectedFile(request, "/movies.html"); });
     server.on("/music", HTTP_GET, [](AsyncWebServerRequest *request) { serveProtectedFile(request, "/music.html"); });
@@ -3734,6 +3839,7 @@ Serial.println("SD Card initialized successfully!");
     server.on("/gallery", HTTP_GET, [](AsyncWebServerRequest *request) { serveProtectedFile(request, "/gallery.html"); });
     server.on("/files", HTTP_GET, [](AsyncWebServerRequest *request) { serveProtectedFile(request, "/files.html"); });
     server.on("/filebrowser", HTTP_GET, [](AsyncWebServerRequest *request) { serveProtectedFile(request, "/filebrowser.html"); });
+    server.on("/comic", HTTP_GET, [](AsyncWebServerRequest *request) { serveProtectedFile(request, "/comics.html"); });
     // Serve root directory and default to index.html
     server.onNotFound([](AsyncWebServerRequest *request) {
         String url = request->url();
@@ -4253,32 +4359,27 @@ server.on("/settings", HTTP_POST, [](AsyncWebServerRequest *request){
   server.on("/cpu-temp", HTTP_GET, [](AsyncWebServerRequest *request){
     request->send(200, "application/json", String("{\"temperature\":") + currentTempC + "}");
   });
-  // GET /api/index -> serves bucket index for Music/Shows, nested for others
-  server.on("/api/index", HTTP_GET, [](AsyncWebServerRequest *request){
-    String path = "/";
-    if (request->hasParam("path")) path = normalizePath(request->getParam("path")->value());
 
-    // For Music/Shows paths (including subdirectories), always serve the bucket root index
-    String indexPath = path;
-    if (path == "/Music" || path.startsWith("/Music/")) {
-      indexPath = "/Music";
-    } else if (path == "/Shows" || path.startsWith("/Shows/")) {
-      indexPath = "/Shows";
-    }
+  // GET /api/index -> serves index files (NDJSON format) or builds them
+  server.on("/api/index", HTTP_GET, [](AsyncWebServerRequest *request){
+    String indexPath = "/";
+    if (request->hasParam("path")) indexPath = normalizePath(request->getParam("path")->value());
 
     // Determine the correct index filename
     String indexFile;
     if (indexPath == "/" || (indexPath.startsWith("/") && indexPath.indexOf('/', 1) < 0)) {
-      // Bucket root path (e.g., "/", "/Music", "/Shows")
+      // Bucket root path (e.g., "/", "/Books", "/Movies")
       String bucket = indexPath == "/" ? "root" : indexPath.substring(1);
       indexFile = bucket + ".index.ndjson";
     } else {
-      // Nested path for non-Music/Shows directories
+      // Nested path (e.g., "/Books/SeriesName")
       String enc = encodeIndexName(indexPath);
       indexFile = enc + ".nested.ndjson";
     }
 
     String fullPath = String(INDEX_DIR) + "/" + indexFile;
+
+    // Ensure index directory exists
     ensureIndexDir();
 
     // If index exists, serve it
@@ -4289,17 +4390,11 @@ server.on("/settings", HTTP_POST, [](AsyncWebServerRequest *request){
       return;
     }
 
-    // For bucket roots, enqueue build if missing
-    if (indexPath == "/" || (indexPath.startsWith("/") && indexPath.indexOf('/', 1) < 0)) {
-      Serial.printf("[Index] Request for '%s' - index missing, enqueuing\n", indexPath.c_str());
-      enqueueIndexUpdateForPath(indexPath);
-      request->send(202, "application/json",
-        "{\"status\":\"building\",\"path\":\"" + indexPath + "\"}");
-      return;
-    }
-
-    // For other nested paths, return 404
-    request->send(404, "application/json", "{\"error\":\"Index not found\"}");
+    // If index doesn't exist, enqueue build and return 202
+    Serial.printf("[Index] Request for '%s' - index missing, enqueuing\n", indexPath.c_str());
+    enqueueIndexUpdateForPath(indexPath);
+    request->send(202, "application/json",
+      "{\"status\":\"building\",\"path\":\"" + indexPath + "\"}");
   });
 
   // GET /api/index-nested -> serves nested index files (JSON format) or builds them
@@ -4405,7 +4500,7 @@ server.on("/settings", HTTP_POST, [](AsyncWebServerRequest *request){
         file.close();
 
         // Build JSON response with entries array
-        String jsonResponse = "{\"status\":\"ready\",\"path\":\"" + jsonEscape(path) + "\",\"entries\":[";
+        String jsonResponse = "{\"status        if ((cachedUsedBytes - lastAnnounced) > (2ULL * 1024ULL * 1024ULL * 1024ULL)) {\":\"ready\",\"path\":\"" + jsonEscape(path) + "\",\"entries\":[";
 
         // Split the NDJSON content by lines and extract entries (skip header)
         int start = 0;
@@ -4475,8 +4570,11 @@ server.on("/settings", HTTP_POST, [](AsyncWebServerRequest *request){
       // For any Music path, rebuild the entire Music bucket
       buildBucketIndex("/Music");
     } else if(p.startsWith("/Shows/")){
-      // For any Shows subfolder, rebuild the entire Shows bucket
       buildBucketIndex("/Shows");
+    } else if(p == "/Books"){
+      buildBucketIndex("/Books");
+    } else if(p.startsWith("/Books/")){
+      buildBucketIndex("/Books");
     } else {
       // For other top-level buckets, rebuild that bucket
       buildBucketIndex(p);
@@ -4490,6 +4588,72 @@ server.on("/settings", HTTP_POST, [](AsyncWebServerRequest *request){
       Serial.println("[/api/reindex] task create failed");
       delete arg;
     }
+  });
+  server.on("/api/sd-scan", HTTP_POST, [](AsyncWebServerRequest *request){
+    webLog("[API] SD scan requested", "info");
+    request->send(202, "application/json", "{\"status\":\"accepted\",\"message\":\"SD scan started\"}");
+    
+    BaseType_t ok = xTaskCreatePinnedToCore([](void *pv){
+      webLog("[SDScan] Manual SD usage scan starting", "info");
+      scanSDCardUsage();
+      webLog("[SDScan] Manual SD usage scan completed", "success");
+      vTaskDelete(NULL);
+    }, "ManualSDScan", 8*1024, NULL, 1, NULL, 1);
+    
+    if(ok != pdPASS){
+      webLog("[API] SD scan task creation failed", "error");
+    }
+  });
+  server.on("/api/comic-pages", HTTP_GET, [](AsyncWebServerRequest *request){
+    if (!request->hasParam("path")) {
+      request->send(400, "application/json", "{\"error\":\"Missing path parameter\"}");
+      return;
+    }
+    
+    String path = normalizePath(request->getParam("path")->value());
+    
+    if (!path.startsWith("/Books/") || !isComicFolder(path)) {
+      request->send(400, "application/json", "{\"error\":\"Not a comic folder\"}");
+      return;
+    }
+    
+    File d = SD_MMC.open(path);
+    if (!d || !d.isDirectory()) {
+      if (d) d.close();
+      request->send(404, "application/json", "{\"error\":\"Folder not found\"}");
+      return;
+    }
+    
+    std::vector<String> pages;
+    d.rewindDirectory();
+    File e;
+    while ((e = d.openNextFile())) {
+      if (!e.isDirectory()) {
+        String name = String(e.name());
+        int lastSlash = name.lastIndexOf('/');
+        if (lastSlash >= 0) name = name.substring(lastSlash + 1);
+        
+        String lower = name;
+        lower.toLowerCase();
+        if (lower.endsWith(".png") || lower.endsWith(".jpg") || 
+            lower.endsWith(".jpeg") || lower.endsWith(".webp")) {
+          pages.push_back(name);
+        }
+      }
+      e.close();
+    }
+    d.close();
+    
+    std::sort(pages.begin(), pages.end());
+    
+    String json = "{\"path\":\"" + jsonEscape(path) + "\",\"pages\":[";
+    for (size_t i = 0; i < pages.size(); i++) {
+      if (i > 0) json += ",";
+      json += "\"" + jsonEscape(pages[i]) + "\"";
+    }
+    json += "]}";
+    
+    request->send(200, "application/json", json);
   });
 
   // POST /api/tasks?action=restart -> restart background tasks
