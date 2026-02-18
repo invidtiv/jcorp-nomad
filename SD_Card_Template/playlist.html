@@ -76,13 +76,15 @@
 
   /* toolbar */
   .toolbar{
-    background:transparent;
+    background:var(--card);
     padding:.6rem 14px;
     display:flex;
     gap:.6rem;
     align-items:center;
     border-bottom:1px solid rgba(0,0,0,0.04);
     position:sticky;top:64px;z-index:55;flex-wrap:wrap;
+    backdrop-filter:blur(0);
+    will-change:background;
   }
   .search-wrap{display:flex;flex:1;gap:12px;align-items:center;min-width:0}
   .toolbar input[type="search"]{
@@ -191,8 +193,31 @@
 
   .track{padding:10px;border-radius:8px;margin:4px 0;display:flex;align-items:center;gap:8px;cursor:pointer;background:transparent;transition:background .12s, transform .08s}
   .track:hover{background:rgba(0,0,0,0.02);transform:translateY(-1px)}
-  .track .meta{margin-left:auto;color:var(--muted);font-weight:700}
+  .track .track-name{flex:1;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .track .meta{color:var(--muted);font-weight:700;margin-right:8px;white-space:nowrap}
   .track.playing{background:var(--playing-bg);color:var(--playing-text);box-shadow:0 8px 24px rgba(10,12,20,0.06)}
+
+  .add-queue-btn{
+    padding:3px 6px;
+    background:var(--card);
+    border:1px solid rgba(0,0,0,0.08);
+    border-radius:6px;
+    font-size:0.85rem;
+    font-weight:700;
+    color:var(--primary);
+    cursor:pointer;
+    white-space:nowrap;
+    flex-shrink:0;
+    transition:all 0.15s ease;
+    min-width:28px;
+    text-align:center;
+    margin-left:auto;
+  }
+  .add-queue-btn:hover{
+    background:var(--primary);
+    color:#fff;
+    transform:scale(1.05);
+  }
 
   .playlist-view{display:none}
   .playlist-view.active{display:block}
@@ -277,26 +302,72 @@
   }
 
   @media (max-width:600px){
-    .toolbar{padding:.4rem 8px}
-    .btn{padding:6px 8px;font-size:15px}
-    .btn .label{display:none}               /* icon-only on mobile */
-    .playlist .playlist-header{padding:10px}
-    .player{padding:8px}
-    :root{--control-size:40px;--edge-control-size:36px}
-    .progress{height:6px}
+    header h1{font-size:1rem;font-weight:700}
+    .back-btn{padding:.4rem .6rem;font-size:0.9rem}
+    .toolbar{padding:.4rem 8px;gap:.4rem}
+    .search-wrap{flex-direction:column;gap:8px}
+    .toolbar input[type="search"]{font-size:0.9rem}
+    .btn{padding:6px 8px;font-size:15px;gap:6px}
+    .btn .icon + .label{display:none}  /* hide label only if there's an icon */
+    .btn .icon{font-size:1.1rem}
+    .muted{font-size:0.85rem}
+    .playlist .playlist-header{padding:8px;min-height:44px}
+    .playlist .playlist-header .name{font-size:0.95rem}
+    .playlist .playlist-header .count{font-size:0.85rem}
+    .folder{padding:8px 10px;gap:6px}
+    .folder::before{font-size:0.6rem;width:10px}
+    .folder .meta{font-size:0.85rem}
+    .player{padding:6px 8px;gap:6px}
+    .player .title{font-size:0.9rem}
+    .time-row{font-size:0.85rem;gap:8px}
+    #playedTime,#totalTime{flex:0 0 40px;font-size:0.8rem}
+    :root{--control-size:40px;--edge-control-size:36px;--control-gap:6px;--center-gap:6px}
+    .progress{height:6px;margin:0 8px}
     /* switch grid to 3 equal columns on very narrow */
     .controls{
-      grid-template-columns: auto auto auto;
-      justify-items:center;
-      column-gap:6px;
-      padding:0 4px;
+      grid-template-columns: 1fr 1fr 1fr;
+      align-items:center;
+      gap:4px;
+      padding:0 2px;
     }
-    .controls-center{ gap:8px; }
-    .control.play{ width:56px }
-    .control.edge{ height:36px; min-width:36px; padding:0 6px; }
+    .controls-left, .controls-center, .controls-right{
+      display:flex;
+      align-items:center;
+      justify-content:center;
+      gap:4px;
+    }
+    .control{padding:0 8px;font-size:15px}
+    .control.play{ width:48px;font-size:16px }
+    .control.edge{ height:36px; min-width:36px; padding:0 6px;font-size:14px }
+    .control.ghost{font-size:14px}
 
+    .track{padding:8px;gap:6px;font-size:0.95rem}
     .track .meta { display: none !important; }
     .folder .meta { display: none !important; }
+
+    .add-queue-btn{
+      padding:3px 6px;
+      background:var(--card);
+      border:1px solid rgba(0,0,0,0.08);
+      border-radius:6px;
+      font-size:0.85rem;
+      font-weight:700;
+      color:var(--primary);
+      cursor:pointer;
+      white-space:nowrap;
+      flex-shrink:0;
+      transition:all 0.15s ease;
+      min-width:28px;
+      text-align:center;
+    }
+    .add-queue-btn:hover{
+      background:var(--primary);
+      color:#fff;
+      transform:scale(1.05);
+    }
+    .track .add-queue-btn{
+      margin-left:8px;
+    }
   }
 
   .muted{color:var(--muted);font-weight:700}
@@ -310,6 +381,38 @@
   
   .audio-restoring .control {
     opacity: 0.8;
+  }
+
+  /* Toast notifications */
+  .toast {
+    position: fixed;
+    bottom: calc(var(--player-h-desktop) + 20px);
+    left: 50%;
+    transform: translateX(-50%) translateY(120%);
+    background: var(--primary);
+    color: white;
+    padding: 12px 20px;
+    border-radius: 8px;
+    font-weight: 700;
+    font-size: 0.95rem;
+    box-shadow: 0 4px 12px rgba(10,12,20,0.15);
+    transition: transform 0.3s ease;
+    pointer-events: none;
+    z-index: 1000;
+    white-space: nowrap;
+    max-width: 90%;
+  }
+
+  .toast.show {
+    transform: translateX(-50%) translateY(0);
+  }
+
+  @media (max-width:600px) {
+    .toast {
+      bottom: calc(var(--player-h-mobile) + 16px);
+      padding: 10px 16px;
+      font-size: 0.9rem;
+    }
   }
 </style>
 </head>
@@ -335,7 +438,13 @@
         <span class="icon">⇅</span><span class="label">A → Z</span>
       </button>
 
-      <button id="songsBtn" class="btn ghost" title="Songs">Songs</button>
+      <button id="queueBtn" class="btn ghost" title="Queue">
+        <span class="label">Queue</span>
+      </button>
+
+      <button id="songsBtn" class="btn ghost" title="Songs">
+        <span class="label">Songs</span>
+      </button>
     </div>
   </div>
 
@@ -391,6 +500,10 @@
     </div>
   </div>
 
+  <div id="toastNotification" class="toast"></div>
+
+  <div id="toast" class="toast"></div>
+
 <script>
 
 /* ---------- CONFIG ---------- */
@@ -430,7 +543,9 @@ const searchEl = document.getElementById('search');
 const shuffleScopeBtn = document.getElementById('shuffleScopeBtn');
 const sortBtn = document.getElementById('sortBtn');
 const songsBtn = document.getElementById('songsBtn');
+const queueBtn = document.getElementById('queueBtn');
 const backToList = document.getElementById('backToList');
+const toastEl = document.getElementById('toast');
 
 const playlistView = document.getElementById('playlistView');
 const selectorSection = document.getElementById('selectorSection');
@@ -459,6 +574,59 @@ function apiFileUrl(path){ return `/media?file=${encodeURIComponent(normalizePat
 function directUrl(path){ return normalizePath(path); }
 function fmtTime(sec){ if(!sec||!isFinite(sec)) return '0:00'; sec=Math.floor(sec); const h=Math.floor(sec/3600), m=Math.floor((sec%3600)/60), s=sec%60; if(h) return `${h}:${String(m).padStart(2,'0')}:${String(s).padStart(2,'0')}`; return `${m}:${String(s).padStart(2,'0')}`; }
 
+/* ---------- QUEUE STATE MANAGEMENT ---------- */
+const QUEUE_STATE_KEY = 'nomad_queue_state';
+
+function loadQueueState() {
+  try {
+    const raw = localStorage.getItem(QUEUE_STATE_KEY);
+    if (!raw) return { queue: [], currentMode: 'playlist', queueIndex: 0 };
+    return JSON.parse(raw);
+  } catch(e) {
+    return { queue: [], currentMode: 'playlist', queueIndex: 0 };
+  }
+}
+
+function saveQueueState(state) {
+  try {
+    localStorage.setItem(QUEUE_STATE_KEY, JSON.stringify(state));
+  } catch(e) {
+    console.warn('Failed to save queue state:', e);
+  }
+}
+
+function addToQueue(track) {
+  const queueState = loadQueueState();
+
+  const alreadyInQueue = queueState.queue.some(t => normalizePath(t.path) === normalizePath(track.path));
+  if (alreadyInQueue) {
+    showToast('Already in queue');
+    return;
+  }
+
+  if (queueState.queue.length >= 100) {
+    showToast('Queue is full (100 songs max)');
+    return;
+  }
+
+  queueState.queue.push({
+    path: track.path,
+    name: track.name,
+    display: track.display || ''
+  });
+
+  saveQueueState(queueState);
+  showToast('Added to queue');
+}
+
+function showToast(message) {
+  if (!toastEl) return;
+  toastEl.textContent = message;
+  toastEl.classList.add('show');
+  setTimeout(() => {
+    toastEl.classList.remove('show');
+  }, 2000);
+}
 
 /* ---------- SHARED AUDIO STATE ---------- */
 const AUDIO_STATE_KEY = 'nomad_audio_state';
@@ -925,10 +1093,24 @@ function renderPlaylistBody(topPath, bodyEl){
         tracks.forEach(t => {
           if(q && !t.name.toLowerCase().includes(q)) return;
           const tr = document.createElement('div'); tr.className = 'track'; tr.dataset.path = t.path;
-          const tname = document.createElement('div'); tname.textContent = t.name;
+          const tname = document.createElement('div');
+          tname.className = 'track-name';
+          tname.textContent = t.name;
           const meta = document.createElement('div'); meta.className = 'meta'; meta.textContent = '';
+
+          const queueBtn = document.createElement('button');
+          queueBtn.className = 'add-queue-btn';
+          queueBtn.textContent = '+';
+          queueBtn.title = 'Add to queue';
+          queueBtn.onclick = (e) => {
+            e.stopPropagation();
+            addToQueue(t);
+          };
+
           if(currentPlaylist[currentIndex] && currentPlaylist[currentIndex].path === t.path) tr.classList.add('playing');
-          tr.appendChild(tname); tr.appendChild(meta);
+          tr.appendChild(tname);
+          tr.appendChild(meta);
+          tr.appendChild(queueBtn);
           tr.addEventListener('click', (ev)=> {
             ev.stopPropagation();
             // set scope to this child (direct files only) and play from clicked index WITHOUT reordering
@@ -959,9 +1141,20 @@ function renderPlaylistBody(topPath, bodyEl){
       // Only show if this file's directory is exactly topPath (not a subdirectory)
       if(t.dirPath !== topPath) return;
       const tr = document.createElement('div'); tr.className = 'track'; tr.dataset.path = t.path;
-      const tname = document.createElement('div'); tname.textContent = t.name;
+      const tname = document.createElement('div');
+      tname.className = 'track-name';
+      tname.textContent = t.name;
       const meta = document.createElement('div'); meta.className = 'meta'; meta.textContent = '';
-      tr.appendChild(tname); tr.appendChild(meta);
+
+      const queueBtn = document.createElement('button');
+      queueBtn.className = 'add-queue-btn';
+      queueBtn.textContent = '+';
+      queueBtn.onclick = (e) => {
+        e.stopPropagation();
+        addToQueue(t);
+      };
+
+      tr.appendChild(tname); tr.appendChild(meta); tr.appendChild(queueBtn);
       tr.addEventListener('click', (ev)=> {
         ev.stopPropagation();
         // clicking a top file sets the scope to the topPath (recursive) but plays the clicked file without reordering
@@ -1017,16 +1210,29 @@ function renderPlaylistContent(topPath){
   }
   currentPlaylist.forEach((t, idx) => {
     // Check if this track is actually playing (from playing state, not just current state)
-    const isPlaying = playingPlaylist && playingIndex >= 0 && 
-                     playingPlaylist[playingIndex] && 
+    const isPlaying = playingPlaylist && playingIndex >= 0 &&
+                     playingPlaylist[playingIndex] &&
                      playingPlaylist[playingIndex].path === t.path;
-    
-    const tr = document.createElement('div'); 
+
+    const tr = document.createElement('div');
     tr.className = 'track' + (isPlaying ? ' playing' : '');
     tr.dataset.path = t.path;
-    const tname = document.createElement('div'); tname.textContent = t.name;
+    const tname = document.createElement('div');
+    tname.className = 'track-name';
+    tname.textContent = t.name;
     const meta = document.createElement('div'); meta.className = 'meta'; meta.textContent = shortLabelFor(t, openTop || currentScopePath) || '';
-    tr.appendChild(tname); tr.appendChild(meta);
+
+    const queueBtn = document.createElement('button');
+    queueBtn.className = 'add-queue-btn';
+    queueBtn.textContent = '+';
+    queueBtn.onclick = (e) => {
+      e.stopPropagation();
+      addToQueue(t);
+    };
+
+    tr.appendChild(tname);
+    tr.appendChild(meta);
+    tr.appendChild(queueBtn);
     tr.addEventListener('click', ()=> {
       // when user clicks an item in the current list, play that item and update playing state
       currentIndex = idx;
@@ -1094,18 +1300,28 @@ function _setPlayButtonLoading(loading){
 */
 function setScopeAndQueue(scopePath, startAt = 0, autoPlay = false, recursive = true){
   if(!scopePath) return;
-  
+
+  // Save queue state when switching to playlist mode
+  const queueState = loadQueueState();
+  if(queueState.currentMode === 'queue' && queueState.queue.length > 0){
+    queueState.savedPlaylist = currentPlaylist.slice();
+    queueState.savedPlaylistIndex = currentIndex;
+    queueState.savedPlaylistSource = { scopePath: currentScopePath };
+  }
+  queueState.currentMode = 'playlist';
+  saveQueueState(queueState);
+
   if(autoPlay) {
     // Full playback mode - update both playing and browsing state
     playingScopePath = scopePath;
     playingPlaylist = (recursive ? gatherRecursive(scopePath) : gatherDirect(scopePath));
     playingIndex = Math.max(0, Math.min(startAt, playingPlaylist.length-1));
-    
+
     // Update current references for UI consistency
     currentScopePath = scopePath;
     currentPlaylist = playingPlaylist;
     currentIndex = playingIndex;
-    
+
     const item = playingPlaylist[playingIndex];
     if(item){
       playerTitle.textContent = item.name;
@@ -1123,7 +1339,7 @@ function setScopeAndQueue(scopePath, startAt = 0, autoPlay = false, recursive = 
     currentScopePath = scopePath;
     currentPlaylist = (recursive ? gatherRecursive(scopePath) : gatherDirect(scopePath));
     currentIndex = Math.max(0, Math.min(startAt, currentPlaylist.length-1));
-    
+
     // If nothing is currently playing, initialize playing state to match current
     if(!playingScopePath || !audio.src) {
       playingScopePath = scopePath;
@@ -1259,6 +1475,9 @@ audio.addEventListener('waiting', ()=> { _setPlayButtonLoading(true); });
 audio.addEventListener('stalled', ()=> { _setPlayButtonLoading(true); });
 audio.addEventListener('ended', ()=> {
   if(audio.loop) return;
+
+  const queueState = loadQueueState();
+
   if(scopeLoopActive){
     const lastIndex = (currentPlaylist && currentPlaylist.length) ? currentPlaylist.length - 1 : -1;
     if(lastIndex >= 0 && currentIndex >= lastIndex){
@@ -1267,7 +1486,25 @@ audio.addEventListener('ended', ()=> {
       return;
     }
   }
-  playNext();
+
+  if(currentIndex < currentPlaylist.length - 1){
+    playNext();
+  } else {
+    if(queueState.queue && queueState.queue.length > 0 && queueState.currentMode === 'playlist'){
+      queueState.currentMode = 'queue';
+      queueState.queueIndex = 0;
+      saveQueueState(queueState);
+      const track = queueState.queue[0];
+      if(track){
+        playerTitle.textContent = track.name || prettify(track.path);
+        audio.src = apiFileUrl(track.path);
+        audio.play().catch(()=>{});
+        console.log('Playlist ended, switching to queue mode');
+      }
+    } else {
+      playNext();
+    }
+  }
 });
 
 /* ---------- AUTO-SAVE AUDIO STATE ---------- */
@@ -1369,7 +1606,7 @@ shuffleScopeBtn.addEventListener('click', ()=> {
 /* sort toggle */
 sortBtn.addEventListener('click', ()=> {
   sortAsc = !sortAsc;
-  const label = sortAsc ? 'A → Z' : 'Z → A';
+  const label = sortAsc ? 'A→Z' : 'Z→A';
   const lblNode = sortBtn.querySelector('.label');
   if(lblNode) lblNode.textContent = label;
   sortBtn.setAttribute('aria-pressed', String(!sortAsc));
@@ -1395,8 +1632,20 @@ sortBtn.addEventListener('click', ()=> {
   }
 });
 
+/* Queue button navigates to queue.html */
+queueBtn.addEventListener('click', () => {
+  if (!audio.paused && audio.currentTime > 0) {
+    saveAudioState();
+    setTimeout(() => {
+      window.location.href = 'queue.html';
+    }, 50);
+  } else {
+    window.location.href = 'queue.html';
+  }
+});
+
 /* songs button */
-songsBtn.addEventListener('click', ()=> { window.location.href = 'music.html'; 
+songsBtn.addEventListener('click', ()=> { window.location.href = 'music.html';
   if (!audio.paused && audio.currentTime > 0) {
     saveAudioState();
     // Add a small delay to ensure localStorage write completes
