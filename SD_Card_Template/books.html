@@ -273,14 +273,24 @@
         .media-grid.large .media-card {
            max-width: 220px;
         }
-        
+
         .media-card.is-directory .thumb-wrapper {
-            border: 3px solid var(--primary);
             box-sizing: border-box;
         }
 
-        body.dark .media-card.is-directory .thumb-wrapper {
-            border-color: #4a9eff;
+        .folder-icon {
+            position: absolute;
+            top: 8px;
+            right: 8px;
+            z-index: 3;
+            font-size: 1.2rem;
+            opacity: 0.7;
+            text-shadow: 0 1px 3px rgba(0,0,0,0.3);
+            pointer-events: none;
+        }
+
+        body.dark .folder-icon {
+            text-shadow: 0 1px 3px rgba(0,0,0,0.6);
         }
 
         .media-card:hover {
@@ -438,6 +448,58 @@
             display: flex;
             gap: 8px;
             min-width: 120px
+        }
+
+        .no-cover-list {
+            margin-top: 20px;
+            display: flex;
+            flex-direction: column;
+            gap: 8px;
+        }
+
+        .book-row {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            padding: 10px;
+            border-radius: 8px;
+            cursor: pointer;
+            transition: transform .12s, box-shadow .12s;
+            background: transparent;
+        }
+
+        .book-row:hover {
+            transform: translateY(-3px);
+            box-shadow: 0 8px 24px rgba(10,12,20,0.04);
+        }
+
+        body.dark .book-row:hover {
+            box-shadow: 0 8px 24px rgba(0,0,0,0.3);
+        }
+
+        .book-row .book-icon {
+            font-size: 1.2rem;
+            flex-shrink: 0;
+        }
+
+        .book-row .title {
+            font-weight: 700;
+            color: var(--primary-dark);
+            flex: 1;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+
+        body.dark .book-row .title {
+            color: var(--primary);
+        }
+
+        .book-row .context {
+            color: var(--muted);
+            font-weight: 600;
+            font-size: 0.9rem;
+            white-space: nowrap;
         }
 
             .row-buttons button {
@@ -1141,6 +1203,13 @@
             return title || filename;
         }
         function fileUrlDirect(path) { if (!path) return ''; return `/media?file=${encodeURIComponent(normalizePath(path))}`; }
+        function formatBytes(bytes) {
+            if (!bytes && bytes !== 0) return '0 B';
+            const k = 1024;
+            const sizes = ['B', 'KB', 'MB', 'GB', 'TB'];
+            const i = Math.floor(Math.log(Math.max(bytes, 1)) / Math.log(k));
+            return parseFloat((bytes / Math.pow(k, i)).toFixed(1)) + ' ' + sizes[i];
+        }
         function formatTime(seconds) {
             if (!isFinite(seconds)) return '0:00';
             const mins = Math.floor(seconds / 60);
@@ -1420,80 +1489,158 @@
 
         /* Render grid */
         function renderGrid() {
-            gridEl.className = `media-grid ${currentSize}`;
-            const frag = document.createDocumentFragment();
             if (filtered.length === 0) {
                 gridEl.innerHTML = '<p style="grid-column:1/-1;text-align:center;color:var(--primary-dark);padding:12px">No books found.</p>';
                 return;
             }
+
+            const withImages = filtered.filter(item => item.cover);
+            const noImages = filtered.filter(item => !item.cover);
+
+            const useMixedMode = withImages.length > 0 && noImages.length > 0;
+
+            if (useMixedMode) {
+                gridEl.className = `media-grid ${currentSize}`;
+            } else {
+                gridEl.className = `media-grid ${currentSize}`;
+            }
+
             const shouldAnimate = !localStorage.getItem(ANIM_KEY);
+            let animIdx = 0;
 
-            filtered.forEach((item, idx) => {
-                const card = document.createElement('div');
-                card.className = 'media-card';
-                if (item.type === 'dir') {
-                    card.classList.add('is-directory');
-                }
-                card.setAttribute('role', 'listitem');
-                card.setAttribute('aria-label', item.name || '');
-                const pathVal = item.type === 'file' ? (item.fileEntry?.path || '') : (item.dir || '');
-                card.dataset.path = pathVal;
+            const frag = document.createDocumentFragment();
 
-                const coverPath = item.cover || '';
-                const imgHTML = coverPath ? `<img class="media-thumb" loading="lazy" src="${coverPath}" alt="${escapeHtml(item.name)}">` : '';
-
-                card.innerHTML = `
-                <div class="thumb-wrapper" aria-hidden="false">
-                    <span class="fallback-text">${escapeHtml(item.name)}</span>
-                    ${imgHTML}
-                </div>
-                `;
-
-                const img = card.querySelector('img');
-                const fallback = card.querySelector('.fallback-text');
-                if (img && coverPath) {
-                    img.addEventListener('load', () => { img.style.opacity = '1'; if (fallback) fallback.style.display = 'none'; });
-                    img.addEventListener('error', () => { img.style.display = 'none'; if (fallback) fallback.style.display = 'block'; });
-                    img.src = coverPath;
-                } else {
-                    if (fallback) fallback.style.display = 'block';
-                }
-
-                card.addEventListener('click', async () => {
+            if (withImages.length > 0 || !useMixedMode) {
+                const itemsToRender = useMixedMode ? withImages : filtered;
+                itemsToRender.forEach((item) => {
+                    const card = document.createElement('div');
+                    card.className = 'media-card';
                     if (item.type === 'dir') {
-                        if (item.isComic) {
-                            window.location.href = `/comics.html?path=${encodeURIComponent(item.dir)}`;
-                        } else {
-                            await openListModal(item);
-                        }
-                    } else {
-                        openActionModal(item.fileEntry);
+                        card.classList.add('is-directory');
                     }
+                    card.setAttribute('role', 'listitem');
+                    card.setAttribute('aria-label', item.name || '');
+                    const pathVal = item.type === 'file' ? (item.fileEntry?.path || '') : (item.dir || '');
+                    card.dataset.path = pathVal;
+
+                    const coverPath = item.cover || '';
+                    const imgHTML = coverPath ? `<img class="media-thumb" loading="lazy" src="${coverPath}" alt="${escapeHtml(item.name)}">` : '';
+
+                    const showFolderIcon = item.type === 'dir' && !item.isComic;
+                    const folderIconHTML = showFolderIcon ? '<span class="folder-icon">📁</span>' : '';
+
+                    card.innerHTML = `
+                    <div class="thumb-wrapper" aria-hidden="false">
+                        <span class="fallback-text">${escapeHtml(item.name)}</span>
+                        ${imgHTML}
+                        ${folderIconHTML}
+                    </div>
+                    `;
+
+                    const img = card.querySelector('img');
+                    const fallback = card.querySelector('.fallback-text');
+                    if (img && coverPath) {
+                        img.addEventListener('load', () => { img.style.opacity = '1'; if (fallback) fallback.style.display = 'none'; });
+                        img.addEventListener('error', () => { img.style.display = 'none'; if (fallback) fallback.style.display = 'block'; });
+                        img.src = coverPath;
+                    } else {
+                        if (fallback) fallback.style.display = 'block';
+                    }
+
+                    card.addEventListener('click', async () => {
+                        if (item.type === 'dir') {
+                            if (item.isComic) {
+                                window.location.href = `/comics.html?path=${encodeURIComponent(item.dir)}`;
+                            } else {
+                                await openListModal(item);
+                            }
+                        } else {
+                            openActionModal(item.fileEntry);
+                        }
+                    });
+
+                    if (shouldAnimate) {
+                        card.style.animation = 'pop-in .36s cubic-bezier(.22,.9,.32,1) both';
+                        card.style.animationDelay = Math.min(6000, animIdx * 55) + 'ms';
+                        animIdx++;
+                    }
+
+                    const fe = item.type === 'file' ? item.fileEntry : null;
+                    if (fe) {
+                        const resume = findResume({ path: fe.path, sz: fe.sz, mt: fe.mt });
+                        if (resume && resume.entry) {
+                            const e = resume.entry;
+                            if (e.cfi || e.page || (e.time && e.duration)) {
+                                updateResumeBadge({ path: fe.path }, e.percent ? e.percent : e.time);
+                            }
+                        }
+                    }
+
+                    frag.appendChild(card);
+                });
+            }
+
+            if (useMixedMode && noImages.length > 0) {
+                const noCoverSection = document.createElement('div');
+                noCoverSection.className = 'no-cover-list';
+                noCoverSection.style.gridColumn = '1 / -1';
+
+                noImages.forEach((item) => {
+                    const row = document.createElement('div');
+                    row.className = 'book-row';
+                    const pathVal = item.type === 'file' ? (item.fileEntry?.path || '') : (item.dir || '');
+                    row.dataset.path = pathVal;
+
+                    let icon = '📖';
+                    if (item.type === 'dir') {
+                        icon = item.isComic ? '📚' : '📁';
+                    } else if (item.fileEntry) {
+                        const name = item.fileEntry.name.toLowerCase();
+                        if (name.endsWith('.mp3') || name.endsWith('.m4a') || name.endsWith('.m4b')) {
+                            icon = '🎧';
+                        } else if (name.endsWith('.cbz') || name.endsWith('.cbr')) {
+                            icon = '📚';
+                        }
+                    }
+
+                    const contextText = item.type === 'file' && item.fileEntry ? formatBytes(item.fileEntry.sz || 0) : '';
+
+                    row.innerHTML = `
+                        <span class="book-icon">${icon}</span>
+                        <span class="title">${escapeHtml(item.name)}</span>
+                        ${contextText ? `<span class="context">${contextText}</span>` : ''}
+                    `;
+
+                    row.addEventListener('click', async () => {
+                        if (item.type === 'dir') {
+                            if (item.isComic) {
+                                window.location.href = `/comics.html?path=${encodeURIComponent(item.dir)}`;
+                            } else {
+                                await openListModal(item);
+                            }
+                        } else {
+                            openActionModal(item.fileEntry);
+                        }
+                    });
+
+                    if (shouldAnimate) {
+                        row.style.animation = 'pop-in .36s cubic-bezier(.22,.9,.32,1) both';
+                        row.style.animationDelay = Math.min(6000, animIdx * 55) + 'ms';
+                        animIdx++;
+                    }
+
+                    noCoverSection.appendChild(row);
                 });
 
-                if (shouldAnimate) {
-                    card.style.animation = 'pop-in .36s cubic-bezier(.22,.9,.32,1) both';
-                    card.style.animationDelay = Math.min(6000, idx * 55) + 'ms';
-                }
-
-                const fe = item.type === 'file' ? item.fileEntry : null;
-                if (fe) {
-                    const resume = findResume({ path: fe.path, sz: fe.sz, mt: fe.mt });
-                    if (resume && resume.entry) {
-                        const e = resume.entry;
-                        if (e.cfi || e.page || (e.time && e.duration)) {
-                            updateResumeBadge({ path: fe.path }, e.percent ? e.percent : e.time);
-                        }
-                    }
-                }
-
-                frag.appendChild(card);
-            });
+                frag.appendChild(noCoverSection);
+            }
 
             gridEl.innerHTML = '';
             gridEl.appendChild(frag);
             if (shouldAnimate) { try { localStorage.setItem(ANIM_KEY, '1'); } catch (e) { } }
         }
+
+
 
         /* List modal */
         async function openListModal(item) {
@@ -1603,16 +1750,19 @@
             const fext = ext(file.path).toLowerCase();
 
             if (fext === '.pdf') {
-                viewButton.textContent = 'Open PDF';
-                viewButton.onclick = () => { actionModal.style.display = 'none'; setTimeout(() => { window.open(fileUrlDirect(file.path), '_blank'); }, 20); };
+                viewButton.textContent = 'Read PDF';
+                viewButton.onclick = () => {
+                    actionModal.style.display = 'none';
+                    setTimeout(() => {
+                        window.location.href = `/pdf.html?path=${encodeURIComponent(file.path)}`;
+                    }, 20);
+                };
             } else if (fext === '.epub') {
                 viewButton.textContent = 'Read EPUB';
                 viewButton.onclick = () => {
                     actionModal.style.display = 'none';
-                    // decouple UI close from async open to avoid swallowed exceptions
-                    setTimeout(async () => {
-                        try { await openEpubReader(file); }
-                        catch (err) { console.error('openEpubReader error', err); alert('Failed to open EPUB: ' + (err && err.message)); }
+                    setTimeout(() => {
+                        window.location.href = `/epub.html?path=${encodeURIComponent(file.path)}`;
                     }, 20);
                 };
             } else if (isComicName(file.path)) {
