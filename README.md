@@ -15,6 +15,20 @@ Stream movies, music, books, and shows anywhere — no internet required.</p>
 
 ---
 
+### LATEST UPDATE
+
+**Major Highlights:**
+*   **Plyr Integration:** Replaced native browser video elements with the Plyr library. This ensures a uniform UI across all devices and fixes playback issues specifically on Apple hardware.
+*   **Theme Customization:** Added a new Theme Control Panel to the Admin Console. It includes 15 preset themes and a customizer for manual color adjustments.
+*   **Music Overhaul & Queue:** Music now plays seamlessly across the Songs, Playlists, and Queue pages without interruption. The new **Queue** feature allows you to add tracks from any music page and reorder or delete them on the fly.
+*   **Books & Comics:** The PDF viewer is now split into its own page for better performance. EPUB support has been cleaned up and is now fully functional. The Comic Reader now supports **Webtoon infinite scroll** and standard reading modes.
+*   **Comic Formatting:** To use the comic reader, rename a `.cbz` file to `.zip`, unzip it, and place the resulting folder (containing the images) into `/Books`. The system will automatically identify it as a comic.
+
+**Default Themes:**
+Default Blue, Forest Night, Cherry Blossom, Mocha Latte, Ocean Depths, Autumn Leaves, Lavender Fields, Sunset Horizon, Coral Reef, Mountain Mist, Jade Garden, Desert Sand, Arctic Aurora, DeLorean, Midnight Code.
+
+---
+
 ## What is Nomad
 
 Jcorp Nomad is an open-source offline media server designed for travel, remote work, classrooms, camping, and more. It runs entirely on an ESP32-S3, creates a local Wi-Fi hotspot, and serves media through a browser interface. Multiple users can access separate media streams simultaneously, all without internet access.  
@@ -84,20 +98,19 @@ Nomad is now **stable** on the `main` branch with several new features and impro
 
 ---
 
-## Features
+### Features
 
-- Admin panel with full device controls  
-- File browser: upload, rename, delete, download, inline editing  
-- Global search on Menu page  
-- Music player with playlists, shuffle, loop, downloads  
-- Shows page with season folder support and specials  
-- Books page: PDF, EPUB, and audiobook support  
-- Gallery page: images and video playback  
-- Files page for general-purpose sharing  
-- Resume/play progress tracking for Movies and Shows  
-- Captive portal for easy access  
-- Persistent settings across reboots  
-- Mobile-friendly web UI
+*   **Admin Panel:** Full device controls, library indexing, Theme Customizer.
+*   **File Browser:** Upload, rename, delete, download, and inline file editing. (I recomend doing this on a PC)
+*   **Global Search:** Quickly find media across all categories from the Menu page.
+*   **Music Player:** Seamless background playback with subdirectory playlists and a dynamic Queue.
+*   **Movies & Shows:** Plyr-integrated playback for Movies and Shows with season/special folder support.
+*   **Digital Library:** Functional EPUB support, PDF handling, and a dedicated Comic/Webtoon reader.
+*   **Resume Tracking:** Saves your playback progress for Movies and Shows.
+*   **Gallery & Files:** Dedicated pages for image viewing, video clips, and general file sharing.
+*   **Captive Portal:** Automatic login/redirection for easy guest access.
+*   **Persistent Settings:** All themes and system configurations remain saved across reboots.
+*   **Mobile-Friendly UI:** Fully responsive design optimized for handheld offline streaming.
 
 ---
 
