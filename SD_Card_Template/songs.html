@@ -75,10 +75,6 @@ main{padding:14px;max-width:1200px;margin:0 auto;padding-bottom:20px;}
     <input id="search" type="search" placeholder="Search songs…">
   </div>
   <div id="totalCount" class="total-count">0 tracks</div>
-  <div class="controls">
-    <button id="shuffleBtn" class="btn"><span class="icon">🔀</span><span class="label">Shuffle</span></button>
-    <button id="sortBtn" class="btn ghost"><span class="icon">A → Z</span></button>
-  </div>
 </div>
 
 <main>
@@ -99,12 +95,13 @@ let directoryMap = new Map();
 let currentPlaylist = [];
 let sortAsc = true;
 let currentPlayingPath = null;
+let isShuffled = false;
+let originalTracks = [];
+let queuePaths = new Set();
 
 const allListEl = document.getElementById('allList');
 const totalCountEl = document.getElementById('totalCount');
 const searchEl = document.getElementById('search');
-const shuffleBtn = document.getElementById('shuffleBtn');
-const sortBtn = document.getElementById('sortBtn');
 
 function normalizePath(p){
   if(!p) return '/';
@@ -262,10 +259,66 @@ async function scanLibrary(){
     if(da !== db) return da.localeCompare(db, undefined, {numeric:true});
     return a.name.localeCompare(b.name, undefined, {numeric:true});
   });
-  
+
   totalCountEl.textContent = `${allTracks.length} tracks`;
   console.log('[Songs] scan complete. tracks:', allTracks.length);
   render();
+
+  await handleHashPlayIfPresent();
+}
+
+async function handleHashPlayIfPresent(){
+  try {
+    if(!location.hash) return;
+    const raw = location.hash.replace(/^#/, '');
+    const params = {};
+    raw.split('&').forEach(p => {
+      const [k,v] = p.split('=');
+      if(!k) return;
+      try { params[k] = v === undefined ? '' : decodeURIComponent(v || ''); }
+      catch(e){ params[k] = v === undefined ? '' : (v || ''); }
+    });
+    if(!params.play) return;
+
+    const playPath = normalizePath(params.play || '');
+
+    const orderedAll = allTracks.slice();
+    orderedAll.sort((a,b) => sortAsc ? a.name.localeCompare(b.name, undefined, {numeric:true}) : b.name.localeCompare(a.name, undefined, {numeric:true}));
+
+    let foundIndex = orderedAll.findIndex(t => normalizePath(t.path).toLowerCase() === playPath.toLowerCase());
+
+    if(foundIndex >= 0){
+      window.parent.postMessage({
+        type: 'PLAY_PLAYLIST',
+        payload: {
+          tracks: orderedAll,
+          startIndex: foundIndex
+        }
+      }, '*');
+      history.replaceState(null, '', location.pathname + location.search);
+      return;
+    }
+
+    const fallbackItem = {
+      id: sha1(playPath),
+      name: prettifyFilename(playPath.split('/').pop() || ''),
+      file: playPath.split('/').pop() || '',
+      path: playPath,
+      dirPath: normalizePath(playPath).replace(/\/[^/]+$/,''),
+      topKey: topLevelKeyForPath(playPath),
+      display: computeDisplayForPath(playPath)
+    };
+    window.parent.postMessage({
+      type: 'PLAY_PLAYLIST',
+      payload: {
+        tracks: [fallbackItem],
+        startIndex: 0
+      }
+    }, '*');
+    history.replaceState(null, '', location.pathname + location.search);
+  } catch(err){
+    console.warn('[Songs] handleHashPlayIfPresent failed', err);
+  }
 }
 
 function render(){
@@ -312,14 +365,21 @@ function render(){
     
     const queueBtn = document.createElement('button');
     queueBtn.className = 'add-queue-btn';
-    queueBtn.textContent = '+';
-    queueBtn.title = 'Add to queue';
+    const inQueue = queuePaths.has(t.path);
+    queueBtn.textContent = inQueue ? '✓' : '+';
+    queueBtn.title = inQueue ? 'In queue' : 'Add to queue';
+    if(inQueue) {
+      queueBtn.style.opacity = '0.5';
+      queueBtn.style.pointerEvents = 'none';
+    }
     queueBtn.onclick = (e) => {
       e.stopPropagation();
-      window.parent.postMessage({
-        type: 'ADD_TO_QUEUE',
-        payload: t
-      }, '*');
+      if(!inQueue){
+        window.parent.postMessage({
+          type: 'ADD_TO_QUEUE',
+          payload: t
+        }, '*');
+      }
     };
     
     row.appendChild(title);
@@ -349,38 +409,11 @@ function fisherYates(a){
   }
 }
 
-shuffleBtn.addEventListener('click', () => {
-  const arr = allTracks.slice();
-  fisherYates(arr);
-  currentPlaylist = arr;
-  render();
-  if(arr.length > 0){
-    window.parent.postMessage({
-      type: 'PLAY_PLAYLIST',
-      payload: {
-        tracks: arr,
-        startIndex: 0
-      }
-    }, '*');
-  }
-});
-
-sortBtn.addEventListener('click', () => {
-  sortAsc = !sortAsc;
-  sortBtn.querySelector('.icon').textContent = sortAsc ? 'A → Z' : 'Z → A';
-  allTracks.sort((a, b) => {
-    return sortAsc ?
-      a.name.localeCompare(b.name, undefined, {numeric: true}) :
-      b.name.localeCompare(a.name, undefined, {numeric: true});
-  });
-  render();
-});
-
 searchEl.addEventListener('input', render);
 
 window.addEventListener('message', (event) => {
   const { type, payload } = event.data;
-  
+
   if(type === 'PLAYBACK_UPDATE'){
     currentPlayingPath = payload.currentTrack ? payload.currentTrack.path : null;
     document.querySelectorAll('.row').forEach(row => {
@@ -391,7 +424,64 @@ window.addEventListener('message', (event) => {
       }
     });
   }
+
+  if(type === 'QUEUE_UPDATE'){
+    queuePaths.clear();
+    if(payload.queue){
+      payload.queue.forEach(track => {
+        if(track.path) queuePaths.add(track.path);
+      });
+    }
+    render();
+  }
+
+  if(type === 'SHUFFLE'){
+    if(!isShuffled){
+      originalTracks = allTracks.slice();
+      const arr = allTracks.slice();
+      fisherYates(arr);
+      allTracks = arr;
+      currentPlaylist = arr;
+      isShuffled = true;
+      render();
+      if(arr.length > 0){
+        window.parent.postMessage({
+          type: 'PLAY_PLAYLIST',
+          payload: {
+            tracks: arr,
+            startIndex: 0
+          }
+        }, '*');
+      }
+    } else {
+      allTracks = originalTracks.slice();
+      currentPlaylist = allTracks;
+      isShuffled = false;
+      render();
+      if(allTracks.length > 0){
+        window.parent.postMessage({
+          type: 'PLAY_PLAYLIST',
+          payload: {
+            tracks: allTracks,
+            startIndex: 0
+          }
+        }, '*');
+      }
+    }
+  }
+
+  if(type === 'SORT'){
+    const sortAsc = payload.ascending;
+    allTracks.sort((a, b) => {
+      return sortAsc ?
+        a.name.localeCompare(b.name, undefined, {numeric: true}) :
+        b.name.localeCompare(a.name, undefined, {numeric: true});
+    });
+    render();
+  }
 });
+
+window.addEventListener('hashchange', handleHashPlayIfPresent);
 
 scanLibrary();
 </script>
