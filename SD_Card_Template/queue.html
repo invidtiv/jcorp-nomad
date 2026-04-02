@@ -65,6 +65,7 @@ main{padding:14px;max-width:1200px;margin:0 auto;padding-bottom:20px;}
 .queue-action-btn{width:36px;height:36px;border-radius:8px;border:1px solid var(--black-alpha-8);background:var(--card);color:var(--primary);font-size:16px;cursor:pointer;display:flex;align-items:center;justify-content:center;transition:all 0.15s;font-weight:700;}
 .queue-action-btn:hover{background:var(--primary);color:var(--color-white);transform:scale(1.08);}
 .queue-action-btn.danger:hover{background:var(--danger);color:var(--color-white);}
+.queue-action-btn:disabled{opacity:0.3;cursor:not-allowed;pointer-events:none;}
 </style>
 </head>
 <body>
@@ -89,6 +90,9 @@ main{padding:14px;max-width:1200px;margin:0 auto;padding-bottom:20px;}
 let queue = [];
 let queueIndex = 0;
 let currentMode = 'playlist';
+let originalQueue = [];
+let queueSortMode = 'added';
+let isQueueShuffled = false;
 
 const queueListEl = document.getElementById('queueList');
 const queueCountEl = document.getElementById('queueCount');
@@ -97,16 +101,19 @@ const emptyStateEl = document.getElementById('emptyState');
 
 function moveItem(fromIdx, toIdx){
   if(fromIdx < 0 || fromIdx >= queue.length || toIdx < 0 || toIdx >= queue.length) return;
-  const temp = queue[fromIdx];
-  queue[fromIdx] = queue[toIdx];
-  queue[toIdx] = temp;
-  if(queueIndex === fromIdx) queueIndex = toIdx;
-  else if(queueIndex === toIdx) queueIndex = fromIdx;
-  render();
+  if(fromIdx === toIdx) return;
+
   window.parent.postMessage({
-    type: 'QUEUE_UPDATED',
-    payload: { queue, queueIndex }
+    type: 'MOVE_QUEUE',
+    payload: { fromIdx, toIdx }
   }, '*');
+}
+
+function fisherYates(a){
+  for(let i=a.length-1;i>0;i--){
+    const j=Math.floor(Math.random()*(i+1));
+    [a[i],a[j]]=[a[j],a[i]];
+  }
 }
 
 function render(){
@@ -208,11 +215,53 @@ clearQueueBtn.addEventListener('click', () => {
 
 window.addEventListener('message', (event) => {
   const { type, payload } = event.data;
-  
+
   if(type === 'QUEUE_UPDATE'){
-    queue = payload.queue || [];
+    originalQueue = payload.queue || [];
     queueIndex = payload.queueIndex || 0;
     currentMode = payload.mode || 'playlist';
+
+    // Apply current sort mode to new queue data
+    if(queueSortMode === 'added'){
+      queue = originalQueue.slice();
+    } else if(queueSortMode === 'asc'){
+      queue = originalQueue.slice().sort((a,b) => a.name.localeCompare(b.name, undefined, {numeric: true}));
+    } else if(queueSortMode === 'desc'){
+      queue = originalQueue.slice().sort((a,b) => b.name.localeCompare(a.name, undefined, {numeric: true}));
+    } else if(queueSortMode === 'shuffled'){
+      queue = originalQueue.slice();
+      fisherYates(queue);
+    }
+
+    render();
+  }
+
+  if(type === 'SHUFFLE'){
+    if(queueSortMode === 'shuffled'){
+      queue = originalQueue.slice();
+      queueSortMode = 'added';
+    } else {
+      queue = originalQueue.slice();
+      fisherYates(queue);
+      queueSortMode = 'shuffled';
+    }
+    render();
+  }
+
+  if(type === 'SORT'){
+    if(payload.mode === 'added'){
+      queue = originalQueue.slice();
+      queueSortMode = 'added';
+    } else {
+      const sortAsc = payload.ascending;
+      if(sortAsc){
+        queue = originalQueue.slice().sort((a,b) => a.name.localeCompare(b.name, undefined, {numeric: true}));
+        queueSortMode = 'asc';
+      } else {
+        queue = originalQueue.slice().sort((a,b) => b.name.localeCompare(a.name, undefined, {numeric: true}));
+        queueSortMode = 'desc';
+      }
+    }
     render();
   }
 });
