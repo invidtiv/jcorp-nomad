@@ -9,14 +9,35 @@
   <link rel="icon" href="/favicon.ico" />
   <link rel="stylesheet" href="/master.css">
   <script>
-(function() {
+(async function() {
   try {
     const isDark = localStorage.getItem('nomad_dark_mode') === 'true';
-    if (isDark) document.documentElement.classList.add('dark');
+    if (isDark) {
+      document.documentElement.classList.add('dark');
+      document.documentElement.classList.add('dark-mode');
+    }
 
-    const saved = localStorage.getItem('nomad_custom_theme');
-    if (saved) {
-      const colors = JSON.parse(saved);
+    async function loadThemeFromServer() {
+      try {
+        const response = await fetch('/.system-theme.json?t=' + Date.now());
+        if (response.ok) {
+          const theme = await response.json();
+          localStorage.setItem('nomad_custom_theme', JSON.stringify(theme));
+          return theme;
+        }
+      } catch (e) {
+        console.log('[Theme UI] No theme on SD card, using localStorage');
+      }
+      return null;
+    }
+
+    const serverTheme = await loadThemeFromServer();
+    const colors = serverTheme || (function() {
+      const saved = localStorage.getItem('nomad_custom_theme');
+      return saved ? JSON.parse(saved) : null;
+    })();
+
+    if (colors) {
       const style = document.createElement('style');
       style.id = 'custom-theme-style';
       style.textContent = `
@@ -25,14 +46,12 @@
           --primary-dark: ${colors.primaryDark} !important;
           --bg: ${colors.bgLight} !important;
           --card: ${colors.cardLight} !important;
-          --card-bg: ${colors.cardLight} !important;
           --text: ${colors.textLight} !important;
           --muted: ${colors.mutedLight} !important;
         }
-        body.dark {
+        body.dark, body.dark-mode {
           --bg: ${colors.bgDark} !important;
           --card: ${colors.cardDark} !important;
-          --card-bg: ${colors.cardDark} !important;
           --text: ${colors.textDark} !important;
           --muted: ${colors.mutedDark} !important;
           --primary: ${colors.primaryDarkTheme} !important;
@@ -40,137 +59,156 @@
       `;
       document.head.appendChild(style);
     }
-  } catch(e) {}
+
+    document.addEventListener('DOMContentLoaded', function() {
+      if (isDark) {
+        document.body.classList.add('dark-mode');
+        document.body.classList.add('dark');
+      }
+    });
+  } catch(e) {
+    console.error('[Theme UI] Theme loading error:', e);
+  }
 })();
 </script>
   <script src="/theme-manager.js"></script>
   <script src="/assets/jquery.min.js"></script>
   <style>
-    html, body {
-      height: 100%;
+    :root {
+      --primary: #007bff;
+      --primary-dark: #0056b3;
+      --bg: #f4f4f9;
+      --card: #ffffff;
+      --text: #333333;
+      --muted: #6b7280;
+      --primary-dark-theme: #4aa3ff;
+      --success-bg: rgba(16, 185, 129, 0.1);
+      --success-text: #10b981;
+      --success-border: rgba(16, 185, 129, 0.3);
+      --danger-bg: rgba(239, 68, 68, 0.1);
+      --danger-text: #ef4444;
+      --danger-border: rgba(239, 68, 68, 0.3);
+    }
+
+    body.dark-mode, body.dark {
+      --bg: #071226;
+      --card: #071722;
+      --text: #eaf6ff;
+      --muted: #93a9c6;
+      --primary: #4aa3ff;
+    }
+
+    * {
       margin: 0;
-      -webkit-font-smoothing: antialiased;
+      padding: 0;
+      box-sizing: border-box;
     }
 
     body {
-      display: flex;
-      flex-direction: column;
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
       background: var(--bg);
       color: var(--text);
+      line-height: 1.4;
+      font-size: 14px;
+      overflow-x: hidden;
     }
 
     .page-bg {
       position: fixed;
       inset: 0;
-      background: var(--bg);
-      z-index: 0;
+      background: linear-gradient(135deg, var(--bg) 0%, var(--card) 100%);
+      z-index: -1;
       pointer-events: none;
-      transition: background .18s linear;
     }
 
     main {
-      flex: 1;
-      display: flex;
-      flex-direction: column;
       max-width: 1200px;
-      width: 100%;
       margin: 0 auto;
-      padding: 1.5rem 1rem;
-      position: relative;
-      z-index: 1;
+      padding: 0.75rem;
     }
 
     .section {
       background: var(--card);
-      border-radius: 12px;
-      padding: 1.5rem;
-      margin-bottom: 1.5rem;
-      box-shadow: var(--shadow);
-      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 1rem;
+      margin-bottom: 1rem;
+      box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+    }
+
+    body.dark-mode .section, body.dark .section {
+      box-shadow: 0 1px 3px rgba(0,0,0,0.3);
     }
 
     .section-title {
       font-size: 1.25rem;
-      font-weight: 700;
+      font-weight: 600;
       margin-bottom: 0.5rem;
-      color: var(--text);
+      color: var(--primary);
     }
 
     .section-description {
+      font-size: 0.85rem;
       color: var(--muted);
-      font-size: 0.9rem;
-      margin-bottom: 1.25rem;
+      margin-bottom: 1rem;
+      line-height: 1.4;
     }
 
     .theme-grid {
       display: grid;
-      grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
-      gap: 1rem;
-      margin-bottom: 1rem;
+      grid-template-columns: repeat(auto-fill, minmax(120px, 1fr));
+      gap: 0.75rem;
     }
 
     .theme-card {
-      border: 2px solid var(--line);
-      border-radius: 10px;
-      padding: 1rem;
-      cursor: pointer;
-      transition: all 0.2s;
-      text-align: center;
       background: var(--card);
-      position: relative;
+      border: 2px solid transparent;
+      border-radius: 6px;
+      padding: 0.75rem;
+      cursor: pointer;
+      transition: all 0.2s ease;
+      box-shadow: 0 1px 2px rgba(0,0,0,0.1);
+    }
+
+    body.dark-mode .theme-card, body.dark .theme-card {
+      background: rgba(255, 255, 255, 0.03);
+      box-shadow: 0 1px 2px rgba(0,0,0,0.3);
     }
 
     .theme-card:hover {
-      border-color: var(--primary);
       transform: translateY(-2px);
-      box-shadow: 0 4px 12px var(--black-alpha-12);
+      box-shadow: 0 3px 8px rgba(0,0,0,0.15);
+      border-color: var(--primary);
+    }
+
+    body.dark-mode .theme-card:hover, body.dark .theme-card:hover {
+      box-shadow: 0 3px 8px rgba(0,0,0,0.5);
     }
 
     .theme-card.active {
       border-color: var(--primary);
-      background: var(--primary-alpha-5);
-      box-shadow: 0 2px 8px var(--primary-alpha-20);
+      background: rgba(0, 123, 255, 0.05);
     }
 
-    .theme-card.active::after {
-      content: '✓';
-      position: absolute;
-      top: 8px;
-      right: 8px;
-      width: 22px;
-      height: 22px;
-      background: var(--primary);
-      color: var(--color-white);
-      border-radius: 50%;
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      font-weight: bold;
-      font-size: 12px;
+    body.dark-mode .theme-card.active, body.dark .theme-card.active {
+      background: rgba(74, 163, 255, 0.1);
     }
 
     .theme-preview {
-      display: grid;
-      grid-template-columns: repeat(4, 1fr);
-      gap: 4px;
-      margin-bottom: 0.75rem;
-      height: 50px;
-      border-radius: 6px;
+      display: flex;
+      gap: 2px;
+      height: 40px;
+      margin-bottom: 0.5rem;
+      border-radius: 4px;
       overflow: hidden;
-      box-shadow: 0 2px 4px var(--black-alpha-8);
     }
 
     .color-bar {
-      transition: transform 0.2s;
-    }
-
-    .theme-card:hover .color-bar {
-      transform: scale(1.05);
+      flex: 1;
     }
 
     .theme-name {
-      font-weight: 700;
-      font-size: 0.9rem;
+      font-weight: 600;
+      font-size: 0.875rem;
       margin-bottom: 0.25rem;
       color: var(--text);
     }
@@ -183,36 +221,26 @@
 
     .color-grid {
       display: grid;
-      grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+      grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
       gap: 1rem;
     }
 
     .color-input-group {
       display: flex;
       flex-direction: column;
-      gap: 0.5rem;
-      padding: 0.75rem;
-      background: var(--bg);
-      border-radius: 8px;
-      border: 1px solid var(--line);
-      transition: all 0.2s;
-    }
-
-    .color-input-group:hover {
-      border-color: var(--primary-alpha-30);
-      transform: translateY(-1px);
+      gap: 0.25rem;
     }
 
     .color-label {
-      font-weight: 600;
-      font-size: 0.85rem;
+      font-weight: 500;
+      font-size: 0.875rem;
       color: var(--text);
     }
 
     .color-help {
-      font-size: 0.75rem;
+      font-size: 0.7rem;
       color: var(--muted);
-      margin-top: -0.25rem;
+      margin-bottom: 0.25rem;
     }
 
     .color-input-wrapper {
@@ -222,78 +250,78 @@
     }
 
     .color-input {
-      width: 60px;
-      height: 44px;
-      border: 2px solid var(--line);
-      border-radius: 6px;
+      width: 50px;
+      height: 36px;
+      border: 2px solid var(--muted);
+      border-radius: 4px;
       cursor: pointer;
-      transition: all 0.2s;
-      box-shadow: 0 1px 3px var(--black-alpha-8);
+      transition: border-color 0.2s ease;
     }
 
     .color-input:hover {
       border-color: var(--primary);
-      transform: scale(1.05);
     }
 
     .color-text-input {
       flex: 1;
-      padding: 0.6rem;
-      border: 1px solid var(--line);
-      border-radius: 6px;
-      font-family: 'Courier New', monospace;
-      font-size: 0.85rem;
-      transition: all 0.2s;
+      padding: 0.5rem 0.75rem;
+      border: 1px solid #d1d5db;
+      border-radius: 4px;
+      font-family: monospace;
+      font-size: 0.8rem;
       background: var(--card);
       color: var(--text);
+      transition: border-color 0.2s ease;
+    }
+
+    body.dark-mode .color-text-input, body.dark .color-text-input {
+      background: rgba(255, 255, 255, 0.05);
+      border-color: var(--muted);
     }
 
     .color-text-input:focus {
       outline: none;
       border-color: var(--primary);
-      box-shadow: 0 0 0 3px var(--primary-alpha-10);
     }
 
     .actions {
       display: flex;
       gap: 0.75rem;
-      justify-content: flex-end;
-      padding-top: 1rem;
-      border-top: 1px solid var(--line);
       flex-wrap: wrap;
     }
 
     .btn {
-      padding: 0.65rem 1.5rem;
+      padding: 0.625rem 1.25rem;
       border: none;
-      border-radius: 8px;
-      font-weight: 600;
+      border-radius: 6px;
+      font-weight: 500;
+      font-size: 0.875rem;
       cursor: pointer;
-      transition: all 0.2s;
-      font-size: 0.9rem;
-      box-shadow: var(--shadow);
+      transition: all 0.2s ease;
+      flex: 1;
+      min-width: 120px;
     }
 
     .btn-primary {
       background: var(--primary);
-      color: var(--color-white);
+      color: white;
     }
 
-    .btn-primary:hover {
+    .btn-primary:hover:not(:disabled) {
       background: var(--primary-dark);
       transform: translateY(-1px);
-      box-shadow: 0 4px 12px var(--primary-alpha-30);
+      box-shadow: 0 2px 6px rgba(0, 123, 255, 0.3);
     }
 
     .btn-secondary {
-      background: var(--card);
-      color: var(--text);
-      border: 1px solid var(--line);
+      background: #6b7280;
+      color: white;
     }
 
-    .btn-secondary:hover {
-      background: var(--bg);
+    .btn-secondary:hover:not(:disabled) {
+      background: #4b5563;
       transform: translateY(-1px);
+      box-shadow: 0 2px 6px rgba(107, 114, 128, 0.3);
     }
 
     .btn:disabled {
@@ -303,10 +331,10 @@
     }
 
     .status-message {
-      padding: 0.75rem 1rem;
-      border-radius: 8px;
-      margin-top: 1rem;
-      font-size: 0.85rem;
+      padding: 0.625rem 0.875rem;
+      border-radius: 6px;
+      margin-top: 0.75rem;
+      font-size: 0.8rem;
       display: none;
       font-weight: 500;
     }
@@ -324,14 +352,95 @@
     }
 
     @media (max-width: 768px) {
-      .theme-grid {
-        grid-template-columns: repeat(auto-fill, minmax(130px, 1fr));
+      body {
+        font-size: 13px;
       }
+
+      main {
+        padding: 0.5rem;
+      }
+
+      .section {
+        padding: 0.75rem;
+        margin-bottom: 0.75rem;
+        border-radius: 6px;
+      }
+
+      .section-title {
+        font-size: 1.1rem;
+        margin-bottom: 0.375rem;
+      }
+
+      .section-description {
+        font-size: 0.8rem;
+        margin-bottom: 0.75rem;
+      }
+
+      .theme-grid {
+        grid-template-columns: repeat(auto-fill, minmax(100px, 1fr));
+        gap: 0.5rem;
+      }
+
+      .theme-card {
+        padding: 0.5rem;
+      }
+
+      .theme-preview {
+        height: 32px;
+        margin-bottom: 0.375rem;
+      }
+
+      .theme-name {
+        font-size: 0.8rem;
+      }
+
+      .theme-desc {
+        font-size: 0.7rem;
+      }
+
       .color-grid {
         grid-template-columns: 1fr;
+        gap: 0.75rem;
       }
-      main {
-        padding: 1rem 0.75rem;
+
+      .color-input {
+        width: 44px;
+        height: 32px;
+      }
+
+      .color-text-input {
+        font-size: 0.75rem;
+        padding: 0.4rem 0.6rem;
+      }
+
+      .btn {
+        padding: 0.5rem 1rem;
+        font-size: 0.8rem;
+        min-width: 100px;
+      }
+
+      .status-message {
+        font-size: 0.75rem;
+        padding: 0.5rem 0.75rem;
+      }
+    }
+
+    @media (max-width: 480px) {
+      .theme-grid {
+        grid-template-columns: repeat(auto-fill, minmax(90px, 1fr));
+        gap: 0.4rem;
+      }
+
+      .color-grid {
+        gap: 0.5rem;
+      }
+
+      .actions {
+        gap: 0.5rem;
+      }
+
+      .btn {
+        flex: 1 1 100%;
       }
     }
   </style>
@@ -342,13 +451,13 @@
   <main>
     <div class="section">
       <h2 class="section-title">Theme Presets</h2>
-      <p class="section-description">Choose from our curated collection of beautiful themes to instantly transform your interface</p>
+      <p class="section-description">Choose from these presets or make your own.</p>
       <div id="theme-grid" class="theme-grid"></div>
     </div>
 
     <div class="section">
       <h2 class="section-title">Custom Colors</h2>
-      <p class="section-description">Fine-tune individual colors to create your perfect theme. Click the color squares to pick visually.</p>
+      <p class="section-description">Fine-tune individual colors to create a theme. Click the color squares to pick visually.</p>
       <div class="color-grid">
         <div class="color-input-group">
           <label class="color-label">Primary Color</label>
