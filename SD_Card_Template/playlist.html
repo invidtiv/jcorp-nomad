@@ -101,6 +101,9 @@ let sortAsc = true;
 let currentPlayingPath = null;
 let openTopPath = null;
 let openSubPath = null;
+let queuePaths = new Set();
+let isShuffled = false;
+let originalTopPlaylists = [];
 
 const playlistsEl = document.getElementById('playlists');
 const playlistCountEl = document.getElementById('playlistCount');
@@ -370,6 +373,13 @@ function render(){
   playlistCountEl.textContent = `${playlistsEl.querySelectorAll('.playlist').length} playlists`;
 }
 
+function fisherYates(a){
+  for(let i=a.length-1;i>0;i--){
+    const j=Math.floor(Math.random()*(i+1));
+    [a[i],a[j]]=[a[j],a[i]];
+  }
+}
+
 function renderPlaylistBody(topPath, bodyEl){
   bodyEl.innerHTML = '';
   const topEntry = directoryMap.get(topPath) || { path: topPath, files: [], dirs: new Set() };
@@ -431,14 +441,21 @@ function renderPlaylistBody(topPath, bodyEl){
           
           const queueBtn = document.createElement('button');
           queueBtn.className = 'add-queue-btn';
-          queueBtn.textContent = '+';
-          queueBtn.title = 'Add to queue';
+          const inQueue = queuePaths.has(t.path);
+          queueBtn.textContent = inQueue ? '✓' : '+';
+          queueBtn.title = inQueue ? 'In queue' : 'Add to queue';
+          if(inQueue){
+            queueBtn.style.opacity = '0.5';
+            queueBtn.style.pointerEvents = 'none';
+          }
           queueBtn.onclick = (e) => {
             e.stopPropagation();
-            window.parent.postMessage({
-              type: 'ADD_TO_QUEUE',
-              payload: t
-            }, '*');
+            if(!inQueue){
+              window.parent.postMessage({
+                type: 'ADD_TO_QUEUE',
+                payload: t
+              }, '*');
+            }
           };
           
           tr.appendChild(tname);
@@ -489,13 +506,21 @@ function renderPlaylistBody(topPath, bodyEl){
       
       const queueBtn = document.createElement('button');
       queueBtn.className = 'add-queue-btn';
-      queueBtn.textContent = '+';
+      const inQueue = queuePaths.has(t.path);
+      queueBtn.textContent = inQueue ? '✓' : '+';
+      queueBtn.title = inQueue ? 'In queue' : 'Add to queue';
+      if(inQueue){
+        queueBtn.style.opacity = '0.5';
+        queueBtn.style.pointerEvents = 'none';
+      }
       queueBtn.onclick = (e) => {
         e.stopPropagation();
-        window.parent.postMessage({
-          type: 'ADD_TO_QUEUE',
-          payload: t
-        }, '*');
+        if(!inQueue){
+          window.parent.postMessage({
+            type: 'ADD_TO_QUEUE',
+            payload: t
+          }, '*');
+        }
       };
       
       tr.appendChild(tname);
@@ -531,7 +556,7 @@ searchEl.addEventListener('input', render);
 
 window.addEventListener('message', (event) => {
   const { type, payload } = event.data;
-  
+
   if(type === 'PLAYBACK_UPDATE'){
     currentPlayingPath = payload.currentTrack ? payload.currentTrack.path : null;
     document.querySelectorAll('.track').forEach(track => {
@@ -541,6 +566,42 @@ window.addEventListener('message', (event) => {
         track.classList.remove('playing');
       }
     });
+  }
+
+  if(type === 'QUEUE_UPDATE'){
+    queuePaths.clear();
+    if(payload.queue){
+      payload.queue.forEach(track => {
+        if(track.path) queuePaths.add(track.path);
+      });
+    }
+    render();
+  }
+
+  if(type === 'SHUFFLE'){
+    if(!isShuffled){
+      originalTopPlaylists = topPlaylists.slice();
+      const arr = topPlaylists.slice();
+      fisherYates(arr);
+      topPlaylists = arr;
+      isShuffled = true;
+    } else {
+      topPlaylists = originalTopPlaylists.slice();
+      isShuffled = false;
+    }
+    render();
+  }
+
+  if(type === 'SORT'){
+    sortAsc = payload.ascending;
+    topPlaylists.sort((a, b) => {
+      const aInfo = directoryMap.get(a) || {name: a.split('/').filter(Boolean).pop()};
+      const bInfo = directoryMap.get(b) || {name: b.split('/').filter(Boolean).pop()};
+      return sortAsc ?
+        aInfo.name.localeCompare(bInfo.name, undefined, {numeric: true}) :
+        bInfo.name.localeCompare(aInfo.name, undefined, {numeric: true});
+    });
+    render();
   }
 });
 
