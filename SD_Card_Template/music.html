@@ -48,10 +48,16 @@
   header h1{font-size:1.15rem;margin:0;font-weight:700;}
   .back-btn{background:var(--white-alpha-12);color:var(--color-white);padding:.45rem .7rem;border-radius:8px;text-decoration:none;font-weight:700;}
 
-  .tabs{display:flex;background:var(--card);border-bottom:2px solid var(--black-alpha-6);padding:0 18px;flex-shrink:0;}
+  .tabs{display:flex;background:var(--card);border-bottom:2px solid var(--black-alpha-6);padding:0 18px;flex-shrink:0;align-items:center;justify-content:center;gap:8px;}
+  .tab-group{display:flex;gap:0;flex:0 0 auto;}
   .tab{padding:12px 20px;cursor:pointer;border-bottom:3px solid transparent;font-weight:700;color:var(--muted);transition:all .2s;}
   .tab:hover{color:var(--primary);}
   .tab.active{color:var(--primary);border-bottom-color:var(--primary);}
+
+  .tab-controls{display:flex;gap:8px;position:absolute;right:18px;}
+  .tab-control-btn{padding:8px 12px;background:var(--card);border:1px solid var(--black-alpha-10);border-radius:8px;color:var(--primary);font-weight:700;font-size:0.85rem;cursor:pointer;transition:all .2s;display:flex;align-items:center;gap:6px;}
+  .tab-control-btn:hover{background:var(--primary);color:var(--color-white);transform:translateY(-1px);}
+  .tab-control-btn.active{background:var(--primary);color:var(--color-white);}
 
   .iframe-container{flex:1;position:relative;overflow:hidden;min-height:0;}
   .iframe-container iframe{position:absolute;top:0;left:0;width:100%;height:100%;border:none;display:none;}
@@ -143,11 +149,35 @@
     width:40px !important;
     height:40px !important;
   }
-  
+
+  .toast{
+    position:fixed;
+    bottom:20px;
+    left:50%;
+    transform:translateX(-50%);
+    background:var(--primary);
+    color:var(--color-white);
+    padding:12px 24px;
+    border-radius:8px;
+    font-weight:700;
+    box-shadow:0 8px 24px var(--black-alpha-12);
+    opacity:0;
+    pointer-events:none;
+    transition:opacity 0.3s;
+    z-index:1000;
+  }
+
+  .toast.show{
+    opacity:1;
+  }
+
   /* MOBILE ADJUSTMENTS */
   @media (max-width:768px){
-    .tabs{padding:0 8px;}
+    .tabs{padding:0 8px;justify-content:flex-start;}
+    .tab-group{flex:1 1 auto;}
     .tab{padding:10px 14px;font-size:0.9rem;}
+    .tab-controls{position:static;margin-left:auto;gap:4px;}
+    .tab-control-btn{padding:6px 10px;font-size:0.85rem;}
 
     .player-bar{
       padding:8px !important;
@@ -159,6 +189,11 @@
   }
 
   @media (max-width:600px){
+    .tabs{flex-wrap:wrap;justify-content:flex-start;gap:4px;}
+    .tab-group{order:1;flex:0 0 100%;justify-content:flex-start;margin-bottom:4px;}
+    .tab-controls{order:2;flex:0 0 auto;margin-left:auto;gap:4px;}
+    .tab-control-btn{padding:5px 8px;font-size:0.8rem;}
+
     .player-bar{
       padding:8px !important;
       min-height:190px !important;
@@ -202,6 +237,36 @@
 
     .tab{padding:8px 10px;font-size:0.85rem;}
   }
+
+  /* TOAST NOTIFICATION */
+  #toast{
+    position:fixed;
+    bottom:170px;
+    left:50%;
+    transform:translateX(-50%);
+    background:var(--primary);
+    color:var(--color-white);
+    padding:12px 20px;
+    border-radius:8px;
+    font-weight:700;
+    font-size:0.9rem;
+    opacity:0;
+    pointer-events:none;
+    transition:opacity 0.3s ease;
+    z-index:1000;
+    box-shadow:0 4px 12px var(--black-alpha-12);
+  }
+  #toast.show{
+    opacity:1;
+  }
+
+  @media (max-width:600px){
+    #toast{
+      bottom:210px;
+      padding:10px 16px;
+      font-size:0.85rem;
+    }
+  }
 </style>
 </head>
 <body data-page="music">
@@ -212,9 +277,15 @@
 </header>
 
 <div class="tabs">
-  <div class="tab active" data-tab="songs">Songs</div>
-  <div class="tab" data-tab="playlists">Playlists</div>
-  <div class="tab" data-tab="queue">Queue</div>
+  <div class="tab-group">
+    <div class="tab active" data-tab="songs">Songs</div>
+    <div class="tab" data-tab="playlists">Playlists</div>
+    <div class="tab" data-tab="queue">Queue</div>
+  </div>
+  <div class="tab-controls">
+    <button class="tab-control-btn" id="shuffleBtn" title="Shuffle"><span>🔀</span></button>
+    <button class="tab-control-btn" id="sortBtn" title="Sort A → Z"><span id="sortLabel">A → Z</span></button>
+  </div>
 </div>
 
 <div class="iframe-container">
@@ -234,22 +305,22 @@
       <div class="time-display" id="totalTime">0:00</div>
     </div>
     <div class="controls">
-      <div class="controls-left">
-        <button class="control-btn secondary edge loop" id="loopBtn" title="Loop: off">🔁</button>
-      </div>
       <div class="controls-center">
+        <button class="control-btn secondary edge loop" id="loopBtn" title="Loop: off">🔁</button>
         <button class="control-btn secondary prev" id="prevBtn" title="Previous">⏮</button>
         <button class="control-btn play" id="playBtn" title="Play">▶</button>
         <button class="control-btn secondary next" id="nextBtn" title="Next">⏭</button>
-      </div>
-      <div class="controls-right">
         <button class="control-btn secondary edge download" id="downloadBtn" title="Download">⬇</button>
       </div>
     </div>
   </div>
 </div>
 
+<div class="toast" id="toast"></div>
+
 <audio id="audio" preload="metadata"></audio>
+
+<div id="toast"></div>
 
 <script>
 const audio = document.getElementById('audio');
@@ -266,6 +337,9 @@ const progressFill = document.getElementById('progressFill');
 const songsFrame = document.getElementById('songsFrame');
 const playlistsFrame = document.getElementById('playlistsFrame');
 const queueFrame = document.getElementById('queueFrame');
+const shuffleBtn = document.getElementById('shuffleBtn');
+const sortBtn = document.getElementById('sortBtn');
+const sortLabel = document.getElementById('sortLabel');
 
 let currentPlaylist = [];
 let currentIndex = -1;
@@ -274,6 +348,13 @@ let queueIndex = 0;
 let playbackMode = 'playlist';
 let loopMode = 'none';
 let currentTrack = null;
+let isShuffled = false;
+let unshuffledPlaylist = [];
+let unshuffledIndex = -1;
+let toastTimeout = null;
+let sortAsc = true;
+let shuffleState = {songs: false, playlists: false, queue: false};
+let queueSortMode = 'added';
 
 function fmtTime(sec){
   if(!sec||!isFinite(sec)) return '0:00';
@@ -282,18 +363,118 @@ function fmtTime(sec){
   return `${m}:${String(s).padStart(2,'0')}`;
 }
 
+function saveState(){
+  try {
+    const state = {
+      queue,
+      queueIndex,
+      currentPlaylist,
+      currentIndex,
+      playbackMode,
+      loopMode,
+      currentTrack,
+      isShuffled,
+      unshuffledPlaylist,
+      unshuffledIndex,
+      currentTime: audio.currentTime || 0,
+      timestamp: Date.now()
+    };
+    localStorage.setItem('nomad_music_state', JSON.stringify(state));
+  } catch(e){
+    console.warn('[Music] Failed to save state:', e);
+  }
+}
+
+function restoreState(){
+  try {
+    const saved = localStorage.getItem('nomad_music_state');
+    if(!saved) return false;
+
+    const state = JSON.parse(saved);
+    const age = Date.now() - (state.timestamp || 0);
+    if(age > 86400000) return false;
+
+    queue = state.queue || [];
+    queueIndex = state.queueIndex || 0;
+    currentPlaylist = state.currentPlaylist || [];
+    currentIndex = state.currentIndex || -1;
+    playbackMode = state.playbackMode || 'playlist';
+    loopMode = state.loopMode || 'none';
+    currentTrack = state.currentTrack || null;
+    isShuffled = state.isShuffled || false;
+    unshuffledPlaylist = state.unshuffledPlaylist || [];
+    unshuffledIndex = state.unshuffledIndex || -1;
+
+    updateLoopButtonUI();
+
+    if(currentTrack){
+      playerTitle.textContent = currentTrack.name || 'Unknown';
+      audio.src = `/media?file=${encodeURIComponent(currentTrack.path)}`;
+      if(state.currentTime && state.currentTime > 0){
+        audio.currentTime = state.currentTime;
+      }
+    }
+
+    broadcastPlaybackUpdate();
+    broadcastQueueUpdate();
+
+    return true;
+  } catch(e){
+    console.warn('[Music] Failed to restore state:', e);
+    return false;
+  }
+}
+
+function updateLoopButtonUI(){
+  if(loopMode === 'none'){
+    loopBtn.title = 'Loop: off';
+    loopBtn.style.opacity = '0.5';
+    loopBtn.style.background = '';
+    loopBtn.style.color = '';
+    loopBtn.textContent = '🔁';
+  } else if(loopMode === 'all'){
+    loopBtn.title = 'Loop: all';
+    loopBtn.style.opacity = '1';
+    loopBtn.style.background = '';
+    loopBtn.style.color = '';
+    loopBtn.textContent = '🔁';
+  } else if(loopMode === 'single'){
+    loopBtn.title = 'Loop: single';
+    loopBtn.style.opacity = '1';
+    loopBtn.style.background = 'var(--primary)';
+    loopBtn.style.color = '#fff';
+    loopBtn.textContent = '🔂';
+  }
+}
+
+
+
 function playTrack(track){
-  if(!track) return;
+  if(!track || !track.path){
+    console.warn('[Music] Invalid track:', track);
+    return;
+  }
   currentTrack = track;
   playerTitle.textContent = track.name || 'Unknown';
   audio.src = `/media?file=${encodeURIComponent(track.path)}`;
-  audio.play().catch(e => console.debug('Play failed:', e));
+  audio.play().catch(e => {
+    console.warn('[Music] Play failed:', e);
+    playerTitle.textContent = 'Error loading track';
+  });
   broadcastPlaybackUpdate();
+  saveState();
 }
 
 function playAtIndex(index, playlist){
-  if(!playlist || index < 0 || index >= playlist.length) return;
+  if(!playlist || index < 0 || index >= playlist.length){
+    console.warn('[Music] Invalid index or playlist:', index, playlist?.length);
+    return;
+  }
   const track = playlist[index];
+  if(!track){
+    console.warn('[Music] Track not found at index:', index);
+    return;
+  }
   playTrack(track);
 }
 
@@ -303,7 +484,7 @@ function handleNext(){
     audio.play();
     return;
   }
-  
+
   if(playbackMode === 'queue' && queue.length > 0){
     if(queueIndex < queue.length - 1){
       queueIndex++;
@@ -313,6 +494,8 @@ function handleNext(){
       playAtIndex(queueIndex, queue);
     } else {
       audio.pause();
+      playerTitle.textContent = 'End of queue';
+      saveState();
     }
   } else if(currentPlaylist.length > 0){
     if(currentIndex < currentPlaylist.length - 1){
@@ -323,8 +506,14 @@ function handleNext(){
       playAtIndex(currentIndex, currentPlaylist);
     } else {
       audio.pause();
+      playerTitle.textContent = 'End of playlist';
+      saveState();
     }
+  } else {
+    audio.pause();
+    playerTitle.textContent = 'Nothing to play';
   }
+  saveState();
 }
 
 function handlePrev(){
@@ -372,72 +561,144 @@ function broadcastQueueUpdate(){
       mode: playbackMode
     }
   };
-  
+
   try {
+    songsFrame.contentWindow?.postMessage(message, '*');
+    playlistsFrame.contentWindow?.postMessage(message, '*');
     queueFrame.contentWindow?.postMessage(message, '*');
   } catch(e){}
 }
 
 function showToast(msg){
-  console.log('Toast:', msg);
+  const toast = document.getElementById('toast');
+  if(!toast) return;
+
+  toast.textContent = msg;
+  toast.classList.add('show');
+
+  if(toastTimeout) clearTimeout(toastTimeout);
+  toastTimeout = setTimeout(() => {
+    toast.classList.remove('show');
+  }, 2000);
 }
 
 window.addEventListener('message', (event) => {
   const { type, payload } = event.data;
-  
+
   if(type === 'PLAY_TRACK'){
     playbackMode = 'single';
     currentPlaylist = [payload];
     currentIndex = 0;
     playTrack(payload);
+    saveState();
   }
-  
+
   else if(type === 'PLAY_PLAYLIST'){
     playbackMode = 'playlist';
     currentPlaylist = payload.tracks || [];
     currentIndex = payload.startIndex || 0;
     if(currentPlaylist.length > 0){
       playAtIndex(currentIndex, currentPlaylist);
+    } else {
+      playerTitle.textContent = 'Empty playlist';
     }
+    saveState();
   }
-  
+
   else if(type === 'PLAY_QUEUE'){
     playbackMode = 'queue';
     if(queue.length > 0){
       queueIndex = payload.startIndex || 0;
+      if(queueIndex < 0) queueIndex = 0;
+      if(queueIndex >= queue.length) queueIndex = queue.length - 1;
       playAtIndex(queueIndex, queue);
+    } else {
+      playerTitle.textContent = 'Queue is empty';
+    }
+    saveState();
+  }
+
+  else if(type === 'ADD_TO_QUEUE'){
+    if(payload && payload.path){
+      queue.push(payload);
+      broadcastQueueUpdate();
+      showToast('Added to queue');
+      saveState();
     }
   }
-  
-  else if(type === 'ADD_TO_QUEUE'){
-    queue.push(payload);
-    broadcastQueueUpdate();
-    showToast('Added to queue');
-  }
-  
+
   else if(type === 'REMOVE_FROM_QUEUE'){
     const { index } = payload;
     if(index >= 0 && index < queue.length){
+      const wasPlayingRemoved = (playbackMode === 'queue' && queueIndex === index);
+
       queue.splice(index, 1);
-      if(playbackMode === 'queue' && queueIndex >= index){
-        queueIndex = Math.max(0, queueIndex - 1);
+
+      if(wasPlayingRemoved){
+        if(queue.length === 0){
+          audio.pause();
+          playerTitle.textContent = 'Queue is empty';
+          currentTrack = null;
+          queueIndex = 0;
+          playbackMode = 'playlist';
+        } else {
+          if(queueIndex >= queue.length){
+            queueIndex = queue.length - 1;
+          }
+          playAtIndex(queueIndex, queue);
+        }
+      } else if(playbackMode === 'queue' && queueIndex > index){
+        queueIndex--;
       }
+
       broadcastQueueUpdate();
+      saveState();
     }
   }
-  
+
+  else if(type === 'MOVE_QUEUE'){
+    const { fromIdx, toIdx } = payload;
+    if(fromIdx >= 0 && fromIdx < queue.length && toIdx >= 0 && toIdx < queue.length){
+      const item = queue.splice(fromIdx, 1)[0];
+      queue.splice(toIdx, 0, item);
+
+      if(playbackMode === 'queue'){
+        if(queueIndex === fromIdx){
+          queueIndex = toIdx;
+        } else if(queueIndex > fromIdx && queueIndex <= toIdx){
+          queueIndex--;
+        } else if(queueIndex < fromIdx && queueIndex >= toIdx){
+          queueIndex++;
+        }
+      }
+
+      broadcastQueueUpdate();
+      saveState();
+    }
+  }
+
+  else if(type === 'QUEUE_UPDATED'){
+    queue = payload.queue || [];
+    if(payload.queueIndex !== undefined){
+      queueIndex = payload.queueIndex;
+    }
+    broadcastQueueUpdate();
+    saveState();
+  }
+
   else if(type === 'CLEAR_QUEUE'){
     queue = [];
     queueIndex = 0;
     if(playbackMode === 'queue'){
       audio.pause();
-      playerTitle.textContent = 'Not playing';
+      playerTitle.textContent = 'Queue cleared';
       currentTrack = null;
       playbackMode = 'playlist';
     }
     broadcastQueueUpdate();
+    saveState();
   }
-  
+
   else if(type === 'REQUEST_QUEUE_UPDATE'){
     broadcastQueueUpdate();
   }
@@ -458,14 +719,22 @@ audio.addEventListener('loadedmetadata', () => {
 audio.addEventListener('play', () => {
   playBtn.textContent = '⏸';
   broadcastPlaybackUpdate();
+  saveState();
 });
 
 audio.addEventListener('pause', () => {
   playBtn.textContent = '▶';
   broadcastPlaybackUpdate();
+  saveState();
 });
 
 audio.addEventListener('ended', handleNext);
+
+audio.addEventListener('error', (e) => {
+  console.error('[Music] Audio error:', e);
+  playerTitle.textContent = 'Error loading track';
+  showToast('Failed to load track');
+});
 
 playBtn.addEventListener('click', () => {
   if(audio.paused){
@@ -478,31 +747,26 @@ playBtn.addEventListener('click', () => {
 prevBtn.addEventListener('click', handlePrev);
 nextBtn.addEventListener('click', handleNext);
 
+loopBtn.addEventListener('click', () => {
+  if(loopMode === 'none'){
+    loopMode = 'all';
+    showToast('Loop: all tracks');
+  } else if(loopMode === 'all'){
+    loopMode = 'single';
+    showToast('Loop: single track');
+  } else {
+    loopMode = 'none';
+    showToast('Loop: off');
+  }
+  updateLoopButtonUI();
+  saveState();
+});
+
 progressBar.addEventListener('click', (e) => {
   if(!audio.duration) return;
   const rect = progressBar.getBoundingClientRect();
   const pct = (e.clientX - rect.left) / rect.width;
   audio.currentTime = pct * audio.duration;
-});
-
-loopBtn.addEventListener('click', () => {
-  if(loopMode === 'none'){
-    loopMode = 'all';
-    loopBtn.title = 'Loop: all';
-    loopBtn.style.opacity = '1';
-  } else if(loopMode === 'all'){
-    loopMode = 'single';
-    loopBtn.title = 'Loop: single';
-    loopBtn.style.opacity = '1';
-    loopBtn.style.background = 'var(--primary)';
-    loopBtn.style.color = '#fff';
-  } else {
-    loopMode = 'none';
-    loopBtn.title = 'Loop: off';
-    loopBtn.style.opacity = '0.5';
-    loopBtn.style.background = '';
-    loopBtn.style.color = '';
-  }
 });
 
 downloadBtn.addEventListener('click', () => {
@@ -515,6 +779,78 @@ downloadBtn.addEventListener('click', () => {
   document.body.removeChild(a);
 });
 
+shuffleBtn.addEventListener('click', () => {
+  const activeFrame = document.querySelector('.iframe-container iframe.active');
+  const activeTab = document.querySelector('.tab.active');
+  const tabName = activeTab ? activeTab.dataset.tab : 'songs';
+
+  if(activeFrame){
+    shuffleState[tabName] = !shuffleState[tabName];
+
+    if(shuffleState[tabName]){
+      shuffleBtn.style.opacity = '1';
+      shuffleBtn.style.background = 'var(--primary)';
+      shuffleBtn.style.color = '#fff';
+      shuffleBtn.title = 'Shuffle: on';
+    } else {
+      shuffleBtn.style.opacity = '';
+      shuffleBtn.style.background = '';
+      shuffleBtn.style.color = '';
+      shuffleBtn.title = 'Shuffle: off';
+    }
+
+    activeFrame.contentWindow.postMessage({
+      type: 'SHUFFLE',
+      payload: {}
+    }, '*');
+  }
+});
+
+sortBtn.addEventListener('click', () => {
+  const activeTab = document.querySelector('.tab.active');
+  const tabName = activeTab ? activeTab.dataset.tab : 'songs';
+  const activeFrame = document.querySelector('.iframe-container iframe.active');
+
+  if(tabName === 'queue'){
+    // Cycle through: added → asc → desc → added
+    if(queueSortMode === 'added'){
+      queueSortMode = 'asc';
+      sortLabel.textContent = 'A → Z';
+      sortBtn.title = 'Sort: A → Z';
+    } else if(queueSortMode === 'asc'){
+      queueSortMode = 'desc';
+      sortLabel.textContent = 'Z → A';
+      sortBtn.title = 'Sort: Z → A';
+    } else if(queueSortMode === 'desc' || queueSortMode === 'shuffled'){
+      queueSortMode = 'added';
+      sortLabel.textContent = 'Added';
+      sortBtn.title = 'Sort: Added order';
+    }
+
+    if(activeFrame){
+      if(queueSortMode === 'added'){
+        activeFrame.contentWindow.postMessage({type: 'SORT', payload: {mode: 'added'}}, '*');
+      } else {
+        activeFrame.contentWindow.postMessage({
+          type: 'SORT',
+          payload: { ascending: queueSortMode === 'asc' }
+        }, '*');
+      }
+    }
+  } else {
+    // For songs and playlists, just toggle A→Z / Z→A
+    sortAsc = !sortAsc;
+    sortLabel.textContent = sortAsc ? 'A → Z' : 'Z → A';
+    sortBtn.title = sortAsc ? 'Sort A → Z' : 'Sort Z → A';
+    if(activeFrame){
+      activeFrame.contentWindow.postMessage({
+        type: 'SORT',
+        payload: { ascending: sortAsc }
+      }, '*');
+    }
+  }
+});
+
 document.querySelectorAll('.tab').forEach(tab => {
   tab.addEventListener('click', () => {
     document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
@@ -522,22 +858,50 @@ document.querySelectorAll('.tab').forEach(tab => {
     tab.classList.add('active');
     const tabName = tab.dataset.tab;
     document.getElementById(tabName + 'Frame').classList.add('active');
+
+    // Update shuffle button state when switching tabs
+    if(shuffleState[tabName]){
+      shuffleBtn.style.opacity = '1';
+      shuffleBtn.style.background = 'var(--primary)';
+      shuffleBtn.style.color = '#fff';
+      shuffleBtn.title = 'Shuffle: on';
+    } else {
+      shuffleBtn.style.opacity = '';
+      shuffleBtn.style.background = '';
+      shuffleBtn.style.color = '';
+      shuffleBtn.title = 'Shuffle: off';
+    }
+
+    // Update sort button label when switching tabs
+    if(tabName === 'queue'){
+      if(queueSortMode === 'added'){
+        sortLabel.textContent = 'Added';
+        sortBtn.title = 'Sort: Added order';
+      } else if(queueSortMode === 'asc'){
+        sortLabel.textContent = 'A → Z';
+        sortBtn.title = 'Sort: A → Z';
+      } else if(queueSortMode === 'desc'){
+        sortLabel.textContent = 'Z → A';
+        sortBtn.title = 'Sort: Z → A';
+      }
+    } else {
+      sortLabel.textContent = sortAsc ? 'A → Z' : 'Z → A';
+      sortBtn.title = sortAsc ? 'Sort A → Z' : 'Sort Z → A';
+    }
   });
 });
 
+setInterval(() => {
+  if(!audio.paused && audio.currentTime > 0){
+    saveState();
+  }
+}, 5000);
+
 setTimeout(() => {
+  restoreState();
   broadcastPlaybackUpdate();
   broadcastQueueUpdate();
 }, 500);
-setTimeout(() => {
-  const playerBar = document.querySelector('.player-bar');
-  const controls = document.querySelector('.controls');
-  console.log('Player bar:', playerBar);
-  console.log('Controls:', controls);
-  console.log('Controls display:', window.getComputedStyle(controls).display);
-  console.log('Player bar display:', window.getComputedStyle(playerBar).display);
-  console.log('Screen width:', window.innerWidth);
-}, 1000);
 </script>
 </body>
 </html>
