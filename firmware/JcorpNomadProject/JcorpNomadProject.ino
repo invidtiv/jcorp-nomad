@@ -161,12 +161,18 @@ volatile bool mediaStreamingActive = false; // Flag to indicate active media str
 static bool sdScanned = false;
 const uint32_t SD_SCAN_DELAY = 5000;  // milliseconds after boot
 SemaphoreHandle_t sdMutex = NULL;
-#include <set>
 #include <map>
-static std::set<String> activeStreamingPaths;
-static std::map<String, File> streamingFiles;
-static SemaphoreHandle_t streamingPathsMutex = NULL;
+static uint32_t nextStreamId = 1;
+struct StreamHandle {
+  File file;
+  String path;
+  unsigned long lastActivity;
+  size_t lastEndByte;
+};
+static std::map<uint32_t, StreamHandle> streamingFiles;
+static std::map<String, uint32_t> streamPathIndex;
 static SemaphoreHandle_t streamingFilesMutex = NULL;
+static const int MAX_CONCURRENT_STREAMS = 8;
 
 static uint64_t cachedTotalBytes = 0;
 static uint64_t cachedUsedBytes = 0;
@@ -1599,14 +1605,6 @@ void handleRangeRequest(AsyncWebServerRequest *request) {
 
   if (!filePath.startsWith("/")) filePath = "/" + filePath;
   filePath = normalizePath(filePath);
-  Serial.printf("[DEBUG] handleRangeRequest: path='%s', sdErrorFlag=%s, cooldownUntil=%lu, currentTime=%lu\n",
-                filePath.c_str(),
-                sdErrorFlag ? "TRUE" : "FALSE",
-                sdErrorCooldownUntil,
-                millis());
-  Serial.printf("[RangeHandler] requested filePath='%s' method=%d Range=%s\n",
-                filePath.c_str(), request->method(),
-                request->hasHeader("Range") ? request->header("Range").c_str() : "");
 
   // OPTIMIZATION: Reduce mutex timeout from 5000ms to 1000ms
   if (sdMutex) {
@@ -1622,12 +1620,9 @@ void handleRangeRequest(AsyncWebServerRequest *request) {
   };
 
   bool fileExists = SD_MMC.exists(filePath);
-  Serial.printf("[DEBUG] SD_MMC.exists('%s') = %s\n", filePath.c_str(), fileExists ? "TRUE" : "FALSE");
-  
+
   if (!fileExists) {
-    Serial.printf("[DEBUG] 404 TRIGGERED: File not found: %s (sdErrorFlag=%s)\n", 
-                  filePath.c_str(), 
-                  sdErrorFlag ? "TRUE" : "FALSE");
+    Serial.printf("[RangeHandler] File not found: %s\n", filePath.c_str());
     releaseSd();
     request->send(404, "text/plain", "File not found");
     return;
@@ -1647,16 +1642,12 @@ void handleRangeRequest(AsyncWebServerRequest *request) {
   size_t fileSize = file.size();
 
   if (request->method() == HTTP_HEAD) {
-    String hrFileSize = humanSize(fileSize);
-    Serial.printf("[RangeHandler] HEAD %s size=%s — sending headers only\n",
-                  filePath.c_str(), hrFileSize.c_str());
     AsyncWebServerResponse *headResponse = request->beginResponse(200, "application/octet-stream", "");
     headResponse->addHeader("Accept-Ranges", "bytes");
     headResponse->addHeader("Content-Length", String(fileSize));
     headResponse->addHeader("Cache-Control", "public, max-age=3600");
     headResponse->addHeader("Pragma", "no-cache");
     file.close();
-    releaseSd();
     request->send(headResponse);
     return;
   }
@@ -1685,27 +1676,20 @@ void handleRangeRequest(AsyncWebServerRequest *request) {
     }
   }
 
-  // FIX: Reduce initial chunk from 100MB to 25MB to prevent long buffering delays
+  // FIX: Reduce initial chunk from 100MB to 8MB to prevent long buffering delays
   // that can cause video stalls when browser requests next chunk
-  if (openEndedRange && (endByte - startByte) > (25 * 1024 * 1024)) {
-    endByte = startByte + (25 * 1024 * 1024) - 1;
-    Serial.printf("[RangeHandler] Capping open-ended range to 25MB for smoother streaming: %s-%s\n",
-                  humanSize(startByte).c_str(), humanSize(endByte).c_str());
+  if (openEndedRange && (endByte - startByte) > (8 * 1024 * 1024)) {
+    endByte = startByte + (8 * 1024 * 1024) - 1;
   }
 
   if (endByte >= fileSize) endByte = fileSize - 1;
   if (startByte > endByte) startByte = endByte;
   size_t contentLength = endByte - startByte + 1;
 
-  Serial.printf("[RangeHandler] %s size=%s Range=\"%s\" start=%s end=%s len=%s\n",
-                filePath.c_str(), humanSize(fileSize).c_str(),
-                rangeHeader.length() ? rangeHeader.c_str() : "-",
-                humanSize(startByte).c_str(), humanSize(endByte).c_str(), humanSize(contentLength).c_str());
-
   String mimeType = "application/octet-stream";
   String pLower = filePath;
   pLower.toLowerCase();
-  
+
   bool isMediaStream = false;
   if (pLower.endsWith(".epub")) mimeType = "application/epub+zip";
   else if (pLower.endsWith(".pdf")) mimeType = "application/pdf";
@@ -1723,39 +1707,14 @@ void handleRangeRequest(AsyncWebServerRequest *request) {
   else if (pLower.endsWith(".cbz")) mimeType = "application/vnd.comicbook+zip";
   else if (pLower.endsWith(".cbr")) mimeType = "application/vnd.comicbook-rar";
 
-  if (contentLength > 2048) {
+  if (isMediaStream && startByte < 65536) {
     String fileName = filePath.substring(filePath.lastIndexOf('/') + 1);
-    String logMessage = "Playing: " + fileName + " (" + humanSize(fileSize) + ")";
-    if (isMediaStream) {
-      logMessage += " [Media]";
-    }
-    webLog(logMessage, "media");
+    webLog("Playing: " + fileName + " (" + humanSize(fileSize) + ") [Media]", "media");
   }
 
   if (isMediaStream && contentLength > 10000) {
     mediaStreamingActive = true;
     shutdownBackgroundTasksForStreaming();
-
-    if (streamingFilesMutex && xSemaphoreTake(streamingFilesMutex, pdMS_TO_TICKS(300)) == pdTRUE) {
-      int closed = 0;
-      for (auto it = streamingFiles.begin(); it != streamingFiles.end(); ) {
-        if (it->first != filePath) {
-          if (it->second) it->second.close();
-          if (streamingPathsMutex && xSemaphoreTake(streamingPathsMutex, pdMS_TO_TICKS(50)) == pdTRUE) {
-            activeStreamingPaths.erase(it->first);
-            xSemaphoreGive(streamingPathsMutex);
-          }
-          it = streamingFiles.erase(it);
-          closed++;
-        } else {
-          ++it;
-        }
-      }
-      xSemaphoreGive(streamingFilesMutex);
-      if (closed > 0) {
-        Serial.printf("[Stream] Closed %d previous stream handles before new stream: %s\n", closed, filePath.c_str());
-      }
-    }
   }
 
   bool isProbeRequest = (contentLength <= 2048);
@@ -1766,7 +1725,6 @@ void handleRangeRequest(AsyncWebServerRequest *request) {
       file.seek(startByte);
       size_t bytesRead = file.read(probeBuffer, contentLength);
       file.close();
-      releaseSd();
 
       AsyncWebServerResponse *response = request->beginResponse_P(206, mimeType.c_str(), probeBuffer, contentLength);
       response->addHeader("Access-Control-Allow-Origin", "*");
@@ -1779,99 +1737,101 @@ void handleRangeRequest(AsyncWebServerRequest *request) {
     }
   }
 
-  releaseSd();
   file.close();
 
-  if (streamingPathsMutex && xSemaphoreTake(streamingPathsMutex, pdMS_TO_TICKS(100)) == pdTRUE) {
-    activeStreamingPaths.insert(filePath);
-    xSemaphoreGive(streamingPathsMutex);
+  uint32_t streamId = 0;
+  if (streamingFilesMutex && xSemaphoreTake(streamingFilesMutex, pdMS_TO_TICKS(300)) == pdTRUE) {
+    auto pidx = streamPathIndex.find(filePath);
+    if (pidx != streamPathIndex.end()) {
+      uint32_t existingId = pidx->second;
+      auto eit = streamingFiles.find(existingId);
+      if (eit != streamingFiles.end() && eit->second.file) {
+        eit->second.file.seek(startByte);
+        eit->second.lastActivity = millis();
+        eit->second.lastEndByte = endByte;
+        streamId = existingId;
+        Serial.printf("[Stream] Reuse #%u seek %lu: %s\n",
+                      streamId, (unsigned long)startByte, filePath.c_str());
+        xSemaphoreGive(streamingFilesMutex);
+        goto stream_ready;
+      } else {
+        streamPathIndex.erase(pidx);
+        if (eit != streamingFiles.end()) streamingFiles.erase(eit);
+      }
+    }
+
+    if ((int)streamingFiles.size() >= MAX_CONCURRENT_STREAMS) {
+      uint32_t oldestId = 0;
+      unsigned long oldestTime = 0xFFFFFFFFUL;
+      for (auto &kv : streamingFiles) {
+        if (kv.second.lastActivity < oldestTime) {
+          oldestTime = kv.second.lastActivity;
+          oldestId = kv.first;
+        }
+      }
+      if (oldestId) {
+        auto it = streamingFiles.find(oldestId);
+        if (it != streamingFiles.end()) {
+          Serial.printf("[Stream] Evicting #%u (%s)\n", oldestId, it->second.path.c_str());
+          streamPathIndex.erase(it->second.path);
+          it->second.file.close();
+          streamingFiles.erase(it);
+        }
+      }
+    }
+
+    File f = SD_MMC.open(filePath, "r");
+    if (!f) {
+      Serial.printf("[Stream] Failed to open: %s\n", filePath.c_str());
+      xSemaphoreGive(streamingFilesMutex);
+      request->send(503, "text/plain", "Failed to open file");
+      return;
+    }
+    f.seek(startByte);
+    streamId = nextStreamId++;
+    if (nextStreamId == 0) nextStreamId = 1;
+    StreamHandle sh;
+    sh.file = f;
+    sh.path = filePath;
+    sh.lastActivity = millis();
+    sh.lastEndByte = endByte;
+    streamingFiles[streamId] = sh;
+    streamPathIndex[filePath] = streamId;
+    activeStreams = streamingFiles.size();
+    Serial.printf("[Stream] New #%u at %lu: %s (active=%d)\n",
+                  streamId, (unsigned long)startByte, filePath.c_str(), activeStreams);
+    xSemaphoreGive(streamingFilesMutex);
+  } else {
+    Serial.printf("[Stream] Mutex timeout for: %s\n", filePath.c_str());
+    request->send(503, "text/plain", "Server busy");
+    return;
   }
+
+  stream_ready:
 
   AsyncWebServerResponse *response = request->beginResponse(
     mimeType,
     contentLength,
-    [filePath, startByte](uint8_t *buffer, size_t maxLen, size_t index) mutable -> size_t {
-      if (index == 0) {
-        if (streamingFilesMutex && xSemaphoreTake(streamingFilesMutex, pdMS_TO_TICKS(200)) == pdTRUE) {
-          // CRITICAL FIX: Check if file is already open for this path
-          auto it = streamingFiles.find(filePath);
-          if (it != streamingFiles.end()) {
-            // File handle already exists - check if it's still valid
-            if (it->second && it->second.available()) {
-              // Reuse existing handle, just seek to new position
-              it->second.seek(startByte);
-              Serial.printf("[Stream] Reusing existing file handle at position %lu: %s\n", (unsigned long)startByte, filePath.c_str());
-              xSemaphoreGive(streamingFilesMutex);
-            } else {
-              // Handle is invalid - close and remove it before opening new one
-              Serial.printf("[Stream] Closing stale file handle before reopening: %s\n", filePath.c_str());
-              it->second.close();
-              streamingFiles.erase(it);
-
-              // Now open fresh handle
-              File f = SD_MMC.open(filePath, "r");
-              if (!f) {
-                Serial.printf("[Stream] Failed to open file for streaming: %s\n", filePath.c_str());
-                xSemaphoreGive(streamingFilesMutex);
-                return 0;
-              }
-              streamingFiles[filePath] = f;
-              streamingFiles[filePath].seek(startByte);
-              Serial.printf("[Stream] Opened new file at position %lu: %s\n", (unsigned long)startByte, filePath.c_str());
-              xSemaphoreGive(streamingFilesMutex);
-            }
-          } else {
-            // No existing handle - open new file
-            File f = SD_MMC.open(filePath, "r");
-            if (!f) {
-              Serial.printf("[Stream] Failed to open file for streaming: %s\n", filePath.c_str());
-              xSemaphoreGive(streamingFilesMutex);
-              return 0;
-            }
-            streamingFiles[filePath] = f;
-            streamingFiles[filePath].seek(startByte);
-            Serial.printf("[Stream] Opened file at position %lu: %s\n", (unsigned long)startByte, filePath.c_str());
-            xSemaphoreGive(streamingFilesMutex);
-          }
-        } else {
-          Serial.printf("[Stream] Failed to acquire mutex for file open: %s\n", filePath.c_str());
-          return 0;
-        }
-      }
-
-      // CRITICAL FIX: Keep mutex locked during entire read operation to prevent TOCTOU
-      if (streamingFilesMutex && xSemaphoreTake(streamingFilesMutex, pdMS_TO_TICKS(200)) != pdTRUE) {
-        Serial.printf("[Stream] Mutex timeout during read for: %s\n", filePath.c_str());
+    [streamId](uint8_t *buffer, size_t maxLen, size_t index) -> size_t {
+      if (streamingFilesMutex && xSemaphoreTake(streamingFilesMutex, pdMS_TO_TICKS(150)) != pdTRUE) {
         return 0;
       }
 
-      // Check if file still exists in map
-      auto it = streamingFiles.find(filePath);
+      auto it = streamingFiles.find(streamId);
       if (it == streamingFiles.end()) {
         xSemaphoreGive(streamingFilesMutex);
         return 0;
       }
 
-      File& file = it->second;
+      File &file = it->second.file;
+      it->second.lastActivity = millis();
 
-      // Perform read while holding mutex
-      size_t bytesRead = file.read(buffer, maxLen);
+      size_t toRead = maxLen;
+      if (toRead > 16384) toRead = 16384;
 
-      // Check if stream is complete
-      if (bytesRead == 0 || !file.available()) {
-        file.close();
-        streamingFiles.erase(it);
-        xSemaphoreGive(streamingFilesMutex);
-
-        if (streamingPathsMutex && xSemaphoreTake(streamingPathsMutex, pdMS_TO_TICKS(100)) == pdTRUE) {
-          activeStreamingPaths.erase(filePath);
-          xSemaphoreGive(streamingPathsMutex);
-        }
-
-        return bytesRead;
-      }
-
+      size_t bytesRead = file.read(buffer, toRead);
       xSemaphoreGive(streamingFilesMutex);
+
       return bytesRead;
     }
   );
@@ -1887,12 +1847,8 @@ void handleRangeRequest(AsyncWebServerRequest *request) {
   response->addHeader("Access-Control-Allow-Methods", "GET, HEAD, OPTIONS");
   response->addHeader("Access-Control-Allow-Headers", "Range, Content-Type, Accept");
   response->addHeader("Accept-Ranges", "bytes");
-  if (isMediaStream) {
-    response->addHeader("Accept-Ranges", "none");
-  }
   response->addHeader("Content-Length", String(contentLength));
   response->addHeader("Cache-Control", "public, max-age=3600");
-  response->addHeader("Pragma", "no-cache");
   response->addHeader("Connection", "close");
   request->send(response);
 }
@@ -2038,14 +1994,17 @@ void handleRename(AsyncWebServerRequest *request) {
 
     Serial.printf("[RENAME] Attempting to rename: '%s' -> '%s'\n", oldName.c_str(), newName.c_str());
 
-    if (streamingPathsMutex && xSemaphoreTake(streamingPathsMutex, pdMS_TO_TICKS(100)) == pdTRUE) {
-        if (activeStreamingPaths.find(oldName) != activeStreamingPaths.end()) {
-            xSemaphoreGive(streamingPathsMutex);
+    if (streamingFilesMutex && xSemaphoreTake(streamingFilesMutex, pdMS_TO_TICKS(100)) == pdTRUE) {
+        bool inUse = false;
+        for (auto &kv : streamingFiles) {
+          if (kv.second.path == oldName) { inUse = true; break; }
+        }
+        xSemaphoreGive(streamingFilesMutex);
+        if (inUse) {
             Serial.printf("[RENAME] File is currently streaming: %s\n", oldName.c_str());
             request->send(409, "application/json", "{\"error\":\"File is currently in use\"}");
             return;
         }
-        xSemaphoreGive(streamingPathsMutex);
     }
 
     if (sdMutex && xSemaphoreTake(sdMutex, pdMS_TO_TICKS(5000)) != pdTRUE) {
@@ -2180,14 +2139,17 @@ void handleDelete(AsyncWebServerRequest *request) {
 
     String filename = request->getParam("filename", true)->value();
 
-    if (streamingPathsMutex && xSemaphoreTake(streamingPathsMutex, pdMS_TO_TICKS(100)) == pdTRUE) {
-        if (activeStreamingPaths.find(filename) != activeStreamingPaths.end()) {
-            xSemaphoreGive(streamingPathsMutex);
+    if (streamingFilesMutex && xSemaphoreTake(streamingFilesMutex, pdMS_TO_TICKS(100)) == pdTRUE) {
+        bool inUse = false;
+        for (auto &kv : streamingFiles) {
+          if (kv.second.path == filename) { inUse = true; break; }
+        }
+        xSemaphoreGive(streamingFilesMutex);
+        if (inUse) {
             Serial.printf("[DELETE] File is currently streaming: %s\n", filename.c_str());
             request->send(409, "application/json", "{\"error\":\"File is currently in use\"}");
             return;
         }
-        xSemaphoreGive(streamingPathsMutex);
     }
 
     if (sdMutex && xSemaphoreTake(sdMutex, pdMS_TO_TICKS(5000)) != pdTRUE) {
@@ -2810,7 +2772,7 @@ void applyWiFiSettings() {
   
   Serial.print("Starting WiFi with SSID: ");
   Serial.println(settings.wifiSSID);
-  WiFi.softAP(settings.wifiSSID.c_str(), settings.wifiPassword.c_str());
+  WiFi.softAP(settings.wifiSSID.c_str(), settings.wifiPassword.c_str(), 1, 0, 8);
   dnsServer.start(DNS_PORT, "*", WiFi.softAPIP());
 }
 // Return number of connected stations on the softAP
@@ -3316,20 +3278,21 @@ void checkStreamingTimeout() {
     }
   }
 
-  // Cleanup stale stream file handles every 5 seconds
   static unsigned long lastCleanup = 0;
-  if (millis() - lastCleanup > 5000) {
+  if (millis() - lastCleanup > 15000) {
     lastCleanup = millis();
     if (streamingFilesMutex && xSemaphoreTake(streamingFilesMutex, pdMS_TO_TICKS(100)) == pdTRUE) {
       if (!streamingFiles.empty()) {
+        unsigned long now = millis();
         int closed = 0;
         for (auto it = streamingFiles.begin(); it != streamingFiles.end(); ) {
-          if (!it->second || !it->second.available()) {
-            it->second.close();
-            if (streamingPathsMutex && xSemaphoreTake(streamingPathsMutex, pdMS_TO_TICKS(50)) == pdTRUE) {
-              activeStreamingPaths.erase(it->first);
-              xSemaphoreGive(streamingPathsMutex);
-            }
+          bool stale = !it->second.file || (now - it->second.lastActivity > 120000UL);
+          if (stale) {
+            Serial.printf("[StreamCleanup] Idle #%u (%s, %lus)\n",
+                          it->first, it->second.path.c_str(),
+                          (unsigned long)((now - it->second.lastActivity) / 1000));
+            streamPathIndex.erase(it->second.path);
+            it->second.file.close();
             it = streamingFiles.erase(it);
             closed++;
           } else {
@@ -3337,7 +3300,8 @@ void checkStreamingTimeout() {
           }
         }
         if (closed > 0) {
-          Serial.printf("[StreamCleanup] Closed %d stale stream handles\n", closed);
+          activeStreams = streamingFiles.size();
+          Serial.printf("[StreamCleanup] Closed %d idle, %d active\n", closed, activeStreams);
         }
       }
       xSemaphoreGive(streamingFilesMutex);
@@ -3673,7 +3637,7 @@ void setup() {
 
     // Start WiFi Access Point
     webLogf("info", "Starting WiFi Access Point with SSID: '%s'", settings.wifiSSID.c_str());
-    WiFi.softAP(settings.wifiSSID.c_str(), settings.wifiPassword.c_str());
+    WiFi.softAP(settings.wifiSSID.c_str(), settings.wifiPassword.c_str(), 1, 0, 8);
     webLogf("success", "WiFi Access Point started successfully - IP: %s", WiFi.softAPIP().toString().c_str());
   
 
@@ -3734,14 +3698,7 @@ Serial.println("SD Card initialized successfully!");
       }
     }
 
-    if (!streamingPathsMutex) {
-      streamingPathsMutex = xSemaphoreCreateMutex();
-      if (!streamingPathsMutex) {
-        Serial.println("[WARN] streamingPathsMutex creation failed");
-      } else {
-        Serial.println("[Stream] streamingPathsMutex created");
-      }
-    }
+
 
     if (!streamingFilesMutex) {
       streamingFilesMutex = xSemaphoreCreateMutex();
