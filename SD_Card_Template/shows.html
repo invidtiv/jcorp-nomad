@@ -1388,29 +1388,17 @@ function openVideo(src, useResume=false, ep=null){
 
   console.debug('[Shows] openVideo', { path: currentEpisode.path, index: currentEpisodeIndex });
 
+  console.log('[Shows openVideo] currentEpisode:', currentEpisode ? currentEpisode.path : 'NONE', 'useResume:', useResume);
   const saved = findResumeForPath(currentEpisode);
+  console.log('[Shows openVideo] findResumeForPath result:', saved);
   let startTime = 0;
   if(useResume && saved && saved.entry && saved.entry.position > 1 && !saved.entry.completed){
     startTime = saved.entry.position;
   }
+  console.log('[Shows openVideo] startTime will be:', startTime);
 
+  videoPlayer.removeAttribute('src');
   videoPlayer.innerHTML = '';
-
-  const source = document.createElement('source');
-  source.src = src;
-  source.type = 'video/mp4';
-  videoPlayer.appendChild(source);
-
-  if(currentEpisode.subtitles && currentEpisode.subtitles.length > 0){
-    const subtitleUrl = fileUrl(currentEpisode.subtitles[0]);
-    const track = document.createElement('track');
-    track.kind = 'subtitles';
-    track.label = 'English';
-    track.srclang = 'en';
-    track.src = subtitleUrl;
-    track.default = true;
-    videoPlayer.appendChild(track);
-  }
 
   if (!window.plyrInstance) {
     window.plyrInstance = new Plyr(videoPlayer, {
@@ -1531,31 +1519,54 @@ function openVideo(src, useResume=false, ep=null){
         });
       }
     }, 500);
-  } else {
-    const subtitles = [];
-    if(currentEpisode.subtitles && currentEpisode.subtitles.length > 0){
-      const subtitleUrl = fileUrl(currentEpisode.subtitles[0]);
-      subtitles.push({ kind: 'captions', label: 'English', srclang: 'en', src: subtitleUrl, default: true });
-    }
-    window.plyrInstance.source = {
-      type: 'video',
-      sources: [{ src: src, type: 'video/mp4' }],
-      tracks: subtitles
-    };
   }
+
+  videoPlayer.src = src;
+  if(currentEpisode.subtitles && currentEpisode.subtitles.length > 0){
+    const subtitleUrl = fileUrl(currentEpisode.subtitles[0]);
+    const track = document.createElement('track');
+    track.kind = 'subtitles';
+    track.label = 'English';
+    track.srclang = 'en';
+    track.src = subtitleUrl;
+    track.default = true;
+    videoPlayer.appendChild(track);
+  }
+  videoPlayer.load();
 
   videoModal.style.display = 'flex';
   videoTitle.textContent = currentEpisode.name || '';
 
   if (startTime > 0) {
-    window.plyrInstance.once('canplay', () => {
-      window.plyrInstance.currentTime = startTime;
-      console.log('Resume position set to:', startTime);
-    });
+    let seekDone = false;
+    const doSeek = () => {
+      if(seekDone) return;
+      try {
+        const vid = window.plyrInstance.media || videoPlayer;
+        if(vid.readyState >= 1 && vid.duration > 0){
+          seekDone = true;
+          vid.currentTime = startTime;
+          console.log('Resume position set to:', startTime);
+        }
+      } catch(e){ console.warn('Seek failed:', e); }
+    };
+    videoPlayer.addEventListener('canplay', doSeek, { once: true });
+    videoPlayer.addEventListener('loadeddata', doSeek, { once: true });
+    setTimeout(doSeek, 500);
+    setTimeout(doSeek, 1500);
+    setTimeout(doSeek, 3000);
   }
 
   startAutosave();
-  window.plyrInstance.play().catch(e => console.warn('Play failed:', e));
+
+  const doPlay = () => {
+    window.plyrInstance.play().catch(e => console.warn('Play failed:', e));
+  };
+  if(videoPlayer.readyState >= 3){
+    doPlay();
+  } else {
+    videoPlayer.addEventListener('canplay', doPlay, { once: true });
+  }
 }
 
 /* When an episode ends: mark episode completed and either auto-advance to the next episode
@@ -1756,9 +1767,9 @@ async function handleHashOpenIfPresent(){
       catch(e) { params[k] = v === undefined ? '' : (v || ''); }
     });
 
-    if(!params.open) return;
+    if(!params.open && !params.play) return;
 
-    const openPath = normalizePath(params.open || '');
+    const openPath = normalizePath(params.open || params.play || '');
     const parts = openPath.split('/').filter(Boolean); // e.g. ['Shows','ShowName','Season1'] or ['Shows','ShowName','S01E01.mkv']
 
     // If the path is a show directory or season directory, open the episode modal instead of playing.
@@ -1863,6 +1874,7 @@ sortSelect.addEventListener('change', () => applySort(sortSelect.value));
 (async function init(){
   try {
     await loadLibrary();
+
     // handle hash if present (resume/open)
     await handleHashOpenIfPresent();
   } catch(e){ console.error('init failed', e); }
