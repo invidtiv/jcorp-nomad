@@ -119,7 +119,7 @@ There are a few community forks that target other ESP32 boards, but your mileage
 - **Waveshare ESP32-S3 Dev Board (1.47" LCD version)**
   [Amazon Link](https://amzn.to/4ktB6oT)
 
-- **FAT32 microSD card (16-64GB recommended)**
+- **FAT32 microSD card (16-128GB recommended, up to 2TB)**
   [Amazon Link](https://amzn.to/44tM1c4)
 
 - **SD-Card Extender (optional, 3DP case compatible)**
