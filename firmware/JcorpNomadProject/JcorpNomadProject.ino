@@ -1,5 +1,5 @@
 // Jcorp Nomad Backend
-//<!-- Version 4 -->
+//<!-- Version 4.1 -->
 #include <Arduino.h>
 #include <WiFi.h>
 #include <AsyncTCP.h>
@@ -96,13 +96,13 @@ static void lvglDrainQueue() {
 
 static volatile bool bootButtonPressed = false;
 #ifndef INDEX_MIN_HEAP
-#define INDEX_MIN_HEAP 20000UL
+#define INDEX_MIN_HEAP 15000UL
 #endif
-static inline bool enoughHeapForIndex(size_t estNeededBytes = 40000) {  
+static inline bool enoughHeapForIndex(size_t estNeededBytes = 20000) {
   size_t freeHeap = ESP.getFreeHeap();
   if (freeHeap < (INDEX_MIN_HEAP + estNeededBytes)) {
     Serial.printf("[Index] Not enough heap for index work (free=%u, need~%u). Deferring.\n",
-                  (unsigned)freeHeap, (unsigned)estNeededBytes);
+                  (unsigned)freeHeap, (unsigned)(INDEX_MIN_HEAP + estNeededBytes));
     return false;
   }
   return true;
@@ -693,6 +693,7 @@ bool writeNDIndexForDir(const String &dirPath, const String &outFilename) {
   };
 
   std::function<void(const String&, int)> prepass = [&](const String &path, int depth) {
+    vTaskDelay(pdMS_TO_TICKS(1));
     // Stop recursion if we've hit max depth or if abort flag is set
     if (abortIndex || depth > maxDepth) return;
 
@@ -709,6 +710,7 @@ bool writeNDIndexForDir(const String &dirPath, const String &outFilename) {
 
     File d = SD_MMC.open(path);
     if (!d || !d.isDirectory()) { if (d) d.close(); return; }
+    vTaskDelay(pdMS_TO_TICKS(1));
     d.rewindDirectory();
 
     int itemCount = 0;
@@ -747,12 +749,11 @@ bool writeNDIndexForDir(const String &dirPath, const String &outFilename) {
     }
 
     // Yield more frequently to prevent WDT and keep device responsive
-    if (++itemCount % 20 == 0) {
-    yield();
-    vTaskDelay(pdMS_TO_TICKS(2));  // Give other tasks time (FreeRTOS-friendly)
+    if (++itemCount % 5 == 0) {
+    vTaskDelay(pdMS_TO_TICKS(3));
     if (sdMutex) {
       xSemaphoreGive(sdMutex);
-      vTaskDelay(pdMS_TO_TICKS(5));
+      vTaskDelay(pdMS_TO_TICKS(10));
       if (xSemaphoreTake(sdMutex, pdMS_TO_TICKS(10000)) != pdTRUE) {
         Serial.printf("[Index] Lost mutex during prepass, aborting\n");
         abortIndex = true;
@@ -793,6 +794,7 @@ bool writeNDIndexForDir(const String &dirPath, const String &outFilename) {
 
   // Second pass: write entries with same depth control
   std::function<void(const String&, int)> writepass = [&](const String &path, int depth) {
+    vTaskDelay(pdMS_TO_TICKS(1));
     if (abortIndex || depth > maxDepth) return;
 
     if (shouldSkipFolder(path)) return;
@@ -801,6 +803,7 @@ bool writeNDIndexForDir(const String &dirPath, const String &outFilename) {
 
     File d = SD_MMC.open(path);
     if (!d || !d.isDirectory()) { if (d) d.close(); return; }
+    vTaskDelay(pdMS_TO_TICKS(1));
     d.rewindDirectory();
 
     int itemCount = 0;
@@ -855,11 +858,11 @@ bool writeNDIndexForDir(const String &dirPath, const String &outFilename) {
     e.close();
     }
 
-    if (++itemCount % 20 == 0) {
-    yield();
+    if (++itemCount % 5 == 0) {
+    vTaskDelay(pdMS_TO_TICKS(3));
     if (sdMutex) {
       xSemaphoreGive(sdMutex);
-      vTaskDelay(pdMS_TO_TICKS(5));
+      vTaskDelay(pdMS_TO_TICKS(10));
       if (xSemaphoreTake(sdMutex, pdMS_TO_TICKS(10000)) != pdTRUE) {
         Serial.printf("[Index] Lost mutex during writepass, aborting\n");
         abortIndex = true;
@@ -2406,16 +2409,6 @@ bool loadSdUsageFromFile() {
 // Quick SD usage estimate by scanning main directories only
 // Much faster than full scan - completes in seconds vs minutes
 void quickEstimateSDUsage() {
-  if (sdMutex) {
-    if (xSemaphoreTake(sdMutex, pdMS_TO_TICKS(5000)) != pdTRUE) {
-      Serial.println("[SDBAR] Quick estimate skipped: SD mutex busy");
-      return;
-    }
-  }
-
-  auto releaseSdScan = [](){
-    if (sdMutex) xSemaphoreGive(sdMutex);
-  };
 
   uint64_t totalSize = 0;
   uint64_t reportedTotal = SD_MMC.cardSize();
@@ -2469,7 +2462,7 @@ void quickEstimateSDUsage() {
       entry.close();
 
       if ((fileCount + dirCount) % 50 == 0) {
-        taskYIELD();
+        vTaskDelay(pdMS_TO_TICKS(1));
       }
     }
     mainDir.close();
@@ -2493,13 +2486,13 @@ void quickEstimateSDUsage() {
         entry.close();
 
         if (fileCount % 100 == 0) {
-          taskYIELD();
+          vTaskDelay(pdMS_TO_TICKS(1));
         }
       }
       sub.close();
 
       if (fileCount % 20 == 0) {
-        taskYIELD();
+        vTaskDelay(pdMS_TO_TICKS(1));
       }
     }
 
@@ -2520,8 +2513,6 @@ void quickEstimateSDUsage() {
 
   saveSdUsageToFile(cachedTotalBytes, cachedUsedBytes, millis());
 
-  releaseSdScan();
-
   uint32_t duration = millis() - startMs;
   float usedGB = (float)cachedUsedBytes / (1024.0 * 1024.0 * 1024.0);
   float totalGB = (float)cachedTotalBytes / (1024.0 * 1024.0 * 1024.0);
@@ -2535,21 +2526,9 @@ void quickEstimateSDUsage() {
 }
 
 void scanSDCardUsage() {
-  if (sdMutex) {
-    if (xSemaphoreTake(sdMutex, pdMS_TO_TICKS(5000)) != pdTRUE) {
-      Serial.println("[SDBAR] scan skipped: SD mutex busy (background will retry)");
-      return;
-    }
-  }
-
-  auto releaseSdScan = [](){
-    if (sdMutex) xSemaphoreGive(sdMutex);
-  };
-
   const unsigned long minScanIntervalMs = 15UL * 60UL * 1000UL;
   if (lastScanTime != 0 && (millis() - lastScanTime) < minScanIntervalMs) {
     Serial.printf("[SDBAR] scan skipped: last scan %lu ms ago (min %lu ms)\n", millis() - lastScanTime, minScanIntervalMs);
-    releaseSdScan();
     return;
   }
 
@@ -2621,7 +2600,7 @@ void scanSDCardUsage() {
 
       if ((millis() - lastYield) > tickBudgetMs) {
         lastYield = millis();
-        taskYIELD();
+        vTaskDelay(pdMS_TO_TICKS(1));
       }
     }
     dir.close();
@@ -2632,7 +2611,7 @@ void scanSDCardUsage() {
   lastScanTime = millis();
   sdbarDirty = true;
 
-  releaseSdScan();
+
   Serial.printf("[SDBAR] SD card scan complete: used=%llu bytes, total=%llu bytes, duration=%u ms\n",
     (unsigned long long)cachedUsedBytes, (unsigned long long)cachedTotalBytes, (unsigned) (millis() - startMs));
 
@@ -2878,23 +2857,27 @@ void indexWorkerTask(void *param) {
     if (requestIndexing && !indexingInProgress) {
       // MEMORY CLEANUP: Free up as much memory as possible before indexing
       Serial.printf("[IndexWorker] Pre-index heap check: free=%u\n", ESP.getFreeHeap());
-      
+
       // Force garbage collection of any lingering allocations
-      vTaskDelay(pdMS_TO_TICKS(100));
-      
-      if (!enoughHeapForIndex(30000)) {  // Reduced requirement from 40000
+      vTaskDelay(pdMS_TO_TICKS(200));
+
+      if (!enoughHeapForIndex(20000)) {
         Serial.println("[IndexWorker] Insufficient heap for indexing, clearing caches and retrying");
-        
+
         // Clear any cached data structures
         g_lastIndexSkipLog.clear();
         lastIndexRequestMs.clear();
-        
-        vTaskDelay(pdMS_TO_TICKS(2000)); 
-        
-        if (!enoughHeapForIndex(30000)) {
-          Serial.printf("[IndexWorker] Still insufficient heap after cleanup (free=%u), deferring\n", ESP.getFreeHeap());
-          vTaskDelay(pdMS_TO_TICKS(5000));
-          continue;
+
+        vTaskDelay(pdMS_TO_TICKS(3000));
+
+        if (!enoughHeapForIndex(20000)) {
+          // Try with minimum safe threshold for constrained systems
+          if (ESP.getFreeHeap() < 27000) {
+            Serial.printf("[IndexWorker] Critically low heap (free=%u), cannot safely index. Deferring.\n", ESP.getFreeHeap());
+            vTaskDelay(pdMS_TO_TICKS(10000));
+            continue;
+          }
+          Serial.printf("[IndexWorker] Low heap mode: proceeding cautiously (free=%u)\n", ESP.getFreeHeap());
         }
       }
       
@@ -2953,7 +2936,9 @@ void indexWorkerTask(void *param) {
         // MEMORY CLEANUP: Clear temporary maps after each bucket
         g_lastIndexSkipLog.clear();
 
-        vTaskDelay(pdMS_TO_TICKS(pauseMs));
+        // Extended yield between buckets to prevent watchdog and allow background tasks
+        Serial.printf("[IndexWorker] Bucket complete, yielding (heap=%u)\n", ESP.getFreeHeap());
+        vTaskDelay(pdMS_TO_TICKS(500));
 
         // Process queued items after each bucket
         IndexBuildArgs *msg = nullptr;
@@ -2994,10 +2979,26 @@ void indexWorkerTask(void *param) {
           lvglSendMsg("Filesystem update complete!\nUpdating storage info...", true);
           Serial.println("[IndexWorker] Index complete, triggering storage scan");
 
+          // Extended delay before spawning storage scan to stabilize system
+          vTaskDelay(pdMS_TO_TICKS(1000));
+
           // NOW spawn storage scan AFTER indexing is complete
-          BaseType_t r = xTaskCreatePinnedToCore(sdScanTask, "SDScanPost", 20 * 1024, NULL, 1, NULL, 1);
+          // Use 10KB stack - QUICK mode only calls SD_MMC.totalBytes/usedBytes
+          BaseType_t r = xTaskCreatePinnedToCore(sdScanTask, "SDScanPost", 10 * 1024, NULL, 1, NULL, 1);
           if (r == pdPASS) {
             Serial.println("[IndexWorker] Post-index storage scan spawned");
+          } else {
+            // Fallback: update storage cache inline if task spawn fails (heap fragmentation)
+            Serial.println("[IndexWorker] Post-index scan spawn failed - updating storage inline");
+            if (sdMutex && xSemaphoreTake(sdMutex, pdMS_TO_TICKS(2000)) == pdTRUE) {
+              cachedTotalBytes = SD_MMC.totalBytes();
+              cachedUsedBytes = SD_MMC.usedBytes();
+              xSemaphoreGive(sdMutex);
+              sdbarDirty = true;
+              sdScanCompleted = true;
+              saveSdUsageToFile(cachedTotalBytes, cachedUsedBytes);
+              Serial.println("[IndexWorker] Storage cache updated inline successfully");
+            }
           }
 
           webLog("[IndexWorker] Full media scan completed successfully", "success");
@@ -3030,7 +3031,7 @@ void indexWorkerTask(void *param) {
       }
 
       // Check heap before processing - reduced threshold for live updates
-      if (!enoughHeapForIndex(25000)) {  // Lower threshold for single directory
+      if (!enoughHeapForIndex(15000)) {  // 30KB total with 15K min heap
         Serial.printf("[IndexWorker] Low heap (%u bytes), re-queuing %s\n", 
                      ESP.getFreeHeap(), msg->dir.c_str());
         
@@ -3142,11 +3143,16 @@ void storageMonitorTask(void *param) {
             return;
         }
 
+        if (indexingInProgress) {
+            vTaskDelay(pdMS_TO_TICKS(5000));
+            continue;
+        }
+
         if (sdMutex && xSemaphoreTake(sdMutex, pdMS_TO_TICKS(1000)) == pdTRUE) {
             uint64_t total = SD_MMC.totalBytes();
             uint64_t used = SD_MMC.usedBytes();
             xSemaphoreGive(sdMutex);
-            
+
             float percent = (float)used / (float)total * 100.0f;
             sdbarDirty = true;
         }
@@ -3344,29 +3350,18 @@ void bootCoordinatorTask(void *pv) {
     vTaskDelay(pdMS_TO_TICKS(50));
   }
 
-  // Check if index directory exists - ALWAYS trigger scan if missing
-  if (!SD_MMC.exists(INDEX_DIR)) {
-    Serial.println("[BootCoord] Index directory missing - MUST create indexes (ignoring autoGenerateMedia setting)");
+  String criticalBucketFile = String(INDEX_DIR) + "/Shows.index.ndjson";
+  if (!SD_MMC.exists(INDEX_DIR) || !SD_MMC.exists(criticalBucketFile)) {
+    Serial.println("[BootCoord] Index missing or incomplete - triggering normal index build");
 
     lvglSendMsg("First-time setup detected\nBuilding media indexes...\nThis will take a few minutes", true);
     Serial.println("[BootCoord] LVGL screen updated with first-time setup message");
 
-    ensureIndexDir();
-
-    firstTimeIndexBuild = true;
-    
-    Serial.println("[BootCoord] First-time setup -> starting full index build (required)");
-    
     sdScanCompleted = true;
     sdScanInProgress = false;
 
-    BaseType_t ir = xTaskCreatePinnedToCore(incrementalScanTask, "IncScanFirstTime", 12 * 1024, NULL, 1, NULL, 1);
-    if (ir == pdPASS) {
-      Serial.println("[BootCoord] Initial incrementalScanTask started");
-    }
-
     requestIndexing = true;
-    Serial.println("[BootCoord] First-time index build queued - will reboot when complete");
+    Serial.println("[BootCoord] First-time index build queued via normal scan path");
     Serial.println("[BootCoord] coordination done; exiting task");
     vTaskDelete(NULL);
     return;
@@ -3477,7 +3472,7 @@ void backgroundRegenerateTask(void *pv) {
   // If an SD scan is not in progress, start one in background and wait for its initial pass.
   if (!sdScanInProgress) {
     sdScanCompleted = false;
-    BaseType_t r = xTaskCreatePinnedToCore(sdScanTask, "SDScanAdmin", 20 * 1024, NULL, 1, NULL, 1);
+    BaseType_t r = xTaskCreatePinnedToCore(sdScanTask, "SDScanAdmin", 10 * 1024, NULL, 1, NULL, 1);
     if (r == pdPASS) {
       Serial.println("[AdminRegen] sdScanTask started by admin regenerate");
       // Wait for initial pass (timeout to avoid hanging forever)
@@ -4945,7 +4940,23 @@ server.on("/settings", HTTP_POST, [](AsyncWebServerRequest *request){
 
     // Pass fullScan as parameter to the task (1 = full scan, 0 = quick estimate)
     intptr_t scanMode = fullScan ? 1 : 0;
-    BaseType_t ok = xTaskCreatePinnedToCore(sdScanTask, "ManualSDScan", 20*1024, (void*)scanMode, 1, NULL, 1);
+
+    // Adjust stack size based on scan mode and available heap
+    uint32_t stackSize = 10 * 1024; // Quick mode: 10KB
+    if (fullScan) {
+      // Full scan may need more stack for deep recursion
+      uint32_t freeHeap = ESP.getFreeHeap();
+      if (freeHeap > 35000) {
+        stackSize = 20 * 1024; // Full mode: 20KB if heap available
+      } else {
+        // Fallback to quick scan if heap too low
+        Serial.printf("[API] Heap too low for full scan (%u bytes), falling back to quick scan\n", freeHeap);
+        webLog("[API] Heap too low for full scan - using quick scan instead", "warning");
+        scanMode = 0;
+      }
+    }
+
+    BaseType_t ok = xTaskCreatePinnedToCore(sdScanTask, "ManualSDScan", stackSize, (void*)scanMode, 1, NULL, 1);
 
     if(ok != pdPASS){
       webLog("[API] SD scan task creation failed", "error");
