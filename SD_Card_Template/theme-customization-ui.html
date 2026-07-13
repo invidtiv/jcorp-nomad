@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<!-- Version 2.1 -->
+<!-- Version 4 -->
 <html lang="en">
 <head>
   <meta charset="UTF-8">
@@ -686,8 +686,8 @@
     }
 
     function setupButtons() {
-      document.getElementById('btn-reset').addEventListener('click', () => {
-        const result = ThemeManager.resetTheme();
+      document.getElementById('btn-reset').addEventListener('click', async () => {
+        const result = await ThemeManager.resetTheme();
         if (result.success) {
           const defaultTheme = themes.find(t => t.id === 'default-blue');
           if (defaultTheme) {
