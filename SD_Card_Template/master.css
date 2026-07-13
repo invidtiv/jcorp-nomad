@@ -1,6 +1,6 @@
 /* ============================================
    JCORP NOMAD - MASTER STYLESHEET
-   Version: 1.0
+   Version: 2.0
    ============================================
    
    TABLE OF CONTENTS:
@@ -37,6 +37,8 @@
   --primary: #007bff;
   --primary-dark: #0056b3;
   --primary-600: #0066d6;
+  /* white for text/icons on a colored bg. a bunch of pages used var(--color-white) but it was never defined */
+  --color-white: #ffffff;
   --success: #28a745;
   --warning: #ffc107;
   --danger: #dc3545;
@@ -3811,4 +3813,3 @@ body.dark .plyr {
 /* ============================================
    END OF MASTER.CSS
    ============================================ */
-
