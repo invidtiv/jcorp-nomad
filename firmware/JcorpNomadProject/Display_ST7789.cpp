@@ -153,6 +153,25 @@ void LCD_Init(void)
   LCD_WriteCommand(0x29); 
 }
 /******************************************************************************
+function: Rotate the panel output 180 degrees (for upside-down USB mounting)
+parameter :
+    flip: true = 180-degree rotation, false = normal orientation
+note: XORing MX|MY (0xC0) into MADCTL flips both scan directions = 180 turn.
+      The 172px-wide panel sits centered in the ST7789's 240px RAM
+      (Offset_X 34 on BOTH sides), so LCD_SetCursor's offsets stay valid in
+      either orientation. Caller must repaint the full screen afterward -
+      panel RAM contents display mirrored until redrawn. Only call from the
+      task that drives LVGL flushes; interleaving this command mid-flush
+      would corrupt the panel's address window.
+******************************************************************************/
+void LCD_SetRotation180(bool flip)
+{
+  uint8_t madctl = HORIZONTAL ? 0x00 : 0x70;  // same base as LCD_Init
+  if (flip) madctl ^= 0xC0;
+  LCD_WriteCommand(0x36);
+  LCD_WriteData(madctl);
+}
+/******************************************************************************
 function: Set the cursor position
 parameter :
     Xstart:   Start uint16_t x coordinate

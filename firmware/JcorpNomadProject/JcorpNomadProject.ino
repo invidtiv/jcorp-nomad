@@ -8,6 +8,7 @@
 SdExFat sd;
 ExFatFile file;
 #include <DNSServer.h>
+#include <ESPmDNS.h>
 #include <ArduinoJson.h>
 #include <map>
 #include <time.h>
@@ -313,11 +314,15 @@ struct AdminSettings {
   String adminPassword = "";
   String wifiSSID = "Jcorp_Nomad";
   String wifiPassword = "password";
-  int brightness = 100;            // percent 0-100 (Set_Backlight range)
+  int brightness = 100;            // percent 0-100 (Set_Backlight range); 230 was out-of-range and ignored
   bool autoGenerateMedia = true;   // check for new files on boot (default on)
+  bool flipScreen = false;         // rotate LCD 180 deg (USB port upside down, e.g. car mounts)
 };
 
 AdminSettings settings;
+// Set by the /settings handler (async_tcp task); consumed by the task that owns
+// LVGL flushes. MADCTL must never be written mid-flush from another task.
+volatile bool lcdRotatePending = false;
 const char* SETTINGS_PATH = "/config/settings.json";
 
 // --- Admin session auth ---
@@ -356,7 +361,7 @@ struct LogEntry {
 LogEntry webLogs[MAX_LOG_ENTRIES];
 int logIndex = 0;
 int logCount = 0;
-// guards webLogs[], lots of tasks write it and /console-logs reads it, unsynced
+// guards webLogs[] - lots of tasks write it and /console-logs reads it, unsynced
 // String read/writes race the heap and panic. made in setup() before the server,
 // so early-boot logs (NULL mutex) skip locking safely.
 SemaphoreHandle_t webLogMutex = NULL;
@@ -687,7 +692,7 @@ bool renameOrCopy(const String &src, const String &dst) {
   return true;
 }
 
-// Atomic write helper, writes tmp then moves to final (uses renameOrCopy)
+// Atomic write helper - writes tmp then moves to final (uses renameOrCopy)
 bool atomicWriteFile(const String &tmpPath, const String &finalPath) {
   // final renameOrCopy already does the heavy lifting; here just ensure final exists
   return renameOrCopy(tmpPath, finalPath);
@@ -1199,6 +1204,7 @@ bool loadSettings() {
   // brightness is 0-100 (Set_Backlight ignores >100). old builds defaulted to 230, clamp it
   settings.brightness = constrain(settings.brightness, 0, 100);
   settings.autoGenerateMedia = doc["autoGenerateMedia"] | true;   // default on if unset
+  settings.flipScreen = doc["flipScreen"] | false;
 
   return true;
 }
@@ -1219,6 +1225,7 @@ bool saveSettings() {
   doc["wifiPassword"] = settings.wifiPassword;
   doc["brightness"] = settings.brightness;
   doc["autoGenerateMedia"] = settings.autoGenerateMedia;
+  doc["flipScreen"] = settings.flipScreen;
 
   bool success = serializeJson(doc, file) > 0;
   file.close();
@@ -1350,7 +1357,7 @@ bool lastSDStatus = false;
 unsigned long lastUpdateTime = 0;
 volatile bool requestIndexing = false;     // set by admin endpoint; consumed by index worker
 // true only when the boot change detector actually found changes and queued a reindex.
-// this is the CHECK's result, not the toggle, a boot with no changes indexes nothing.
+// this is the CHECK's result, not the toggle - a boot with no changes indexes nothing.
 volatile bool bootReindexQueued = false;
 volatile bool indexingInProgress = false;  // guard so we never run multiple index runs concurrently
 volatile bool settingsReady = false;       // set to true after loadSettings() runs
@@ -2979,15 +2986,30 @@ void applyRGBSettings() {
     RGB_SetMode(1);  // Rainbow mode
   }
 }
+// mDNS responder: makes http://nomad.local/ work alongside 192.168.4.1.
+// Apple/Android/Linux resolve .local ONLY via multicast, so the wildcard
+// captive DNS alone doesn't cover it. Must be restarted whenever the AP
+// interface is torn down (softAPdisconnect kills the responder's netif).
+const char* MDNS_HOSTNAME = "nomad";
+void startNomadMDNS() {
+  MDNS.end();  // safe no-op if not running; required before re-begin after AP restart
+  if (MDNS.begin(MDNS_HOSTNAME)) {
+    MDNS.addService("http", "tcp", 80);
+    Serial.printf("[mDNS] Responder started: http://%s.local/\n", MDNS_HOSTNAME);
+  } else {
+    Serial.println("[mDNS] Failed to start responder (nomad.local unavailable; IP access unaffected)");
+  }
+}
 void applyWiFiSettings() {
   Serial.print("Stopping existing WiFi Access Point...");
   WiFi.softAPdisconnect(true);  // Stop AP and clear config
   delay(100);  // Give time for cleanup
-  
+
   Serial.print("Starting WiFi with SSID: ");
   Serial.println(settings.wifiSSID);
   WiFi.softAP(settings.wifiSSID.c_str(), settings.wifiPassword.c_str(), 1, 0, MAX_CLIENTS);
   dnsServer.start(DNS_PORT, "*", WiFi.softAPIP());
+  startNomadMDNS();
 }
 // Return number of connected stations on the softAP
 int getConnectedUserCount() {
@@ -3743,6 +3765,8 @@ void setup() {
     webLogf("info", "Starting WiFi Access Point with SSID: '%s'", settings.wifiSSID.c_str());
     WiFi.softAP(settings.wifiSSID.c_str(), settings.wifiPassword.c_str(), 1, 0, MAX_CLIENTS);
     webLogf("success", "WiFi Access Point started successfully - IP: %s", WiFi.softAPIP().toString().c_str());
+    startNomadMDNS();
+    webLogf("info", "Device also reachable at http://%s.local/", MDNS_HOSTNAME);
   
 
 // Initialize SD card with full diagnostics
@@ -3832,6 +3856,14 @@ Serial.println("SD Card initialized successfully!");
     Serial.printf("[SETTINGS] autoGenerateMedia = %s\n", settings.autoGenerateMedia ? "true" : "false");
     applyWiFiSettings();
     applyRGBSettings();
+    if (settings.flipScreen) {
+      // setup() is still single-threaded here (LVGL tasks not started yet),
+      // so writing MADCTL directly is safe. Repaint so the boot screen
+      // isn't left mirrored from the pre-flip draws above.
+      LCD_SetRotation180(true);
+      lv_obj_invalidate(lv_scr_act());
+      lv_timer_handler();
+    }
     lv_label_set_text(ui_ssidlabel, settings.wifiSSID.c_str());
     Serial.print("settings.brightness = ");
     Serial.println(settings.brightness);
@@ -4677,6 +4709,7 @@ server.on("/settings", HTTP_GET, [](AsyncWebServerRequest *request){
   doc["wifiPassword"] = settings.wifiPassword;
   doc["brightness"] = settings.brightness;
   doc["autoGenerateMedia"] = settings.autoGenerateMedia;
+  doc["flipScreen"] = settings.flipScreen;
 
 
   String json;
@@ -4712,6 +4745,13 @@ server.on("/settings", HTTP_POST, [](AsyncWebServerRequest *request){
   if (doc.containsKey("wifiPassword")) settings.wifiPassword = doc["wifiPassword"].as<String>();
   if (doc.containsKey("brightness")) settings.brightness = constrain(doc["brightness"].as<int>(), 0, 100);
   if (doc.containsKey("autoGenerateMedia")) settings.autoGenerateMedia = doc["autoGenerateMedia"].as<bool>();
+  if (doc.containsKey("flipScreen")) {
+    bool newFlip = doc["flipScreen"].as<bool>();
+    if (newFlip != settings.flipScreen) {
+      settings.flipScreen = newFlip;
+      lcdRotatePending = true;  // applied by the LVGL-owning task, not here
+    }
+  }
 
   if (saveSettings()) {
       webLogf("info", "Settings updated successfully");
@@ -5476,6 +5516,12 @@ attachInterrupt(BOOT_BUTTON_PIN, [](){
       (void)param;
       for (;;) {
         dnsServer.processNextRequest();
+
+        if (lcdRotatePending) {
+          lcdRotatePending = false;
+          LCD_SetRotation180(settings.flipScreen);
+          lv_obj_invalidate(lv_scr_act());  // panel RAM shows mirrored until fully repainted
+        }
         Timer_Loop();
 
         // RGB updates are time-sensitive for visual smoothness

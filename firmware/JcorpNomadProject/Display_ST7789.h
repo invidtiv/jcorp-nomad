@@ -25,6 +25,7 @@
 void LCD_SetCursor(uint16_t x1, uint16_t y1, uint16_t x2,uint16_t y2);
 
 void LCD_Init(void);
+void LCD_SetRotation180(bool flip);
 void LCD_SetCursor(uint16_t Xstart, uint16_t Ystart, uint16_t Xend, uint16_t  Yend);
 void LCD_addWindow(uint16_t Xstart, uint16_t Ystart, uint16_t Xend, uint16_t Yend,uint16_t* color);
 

@@ -1,3 +1,4 @@
+// <!-- Version 4 -->
 /* ============================================
    JCORP NOMAD - THEME MANAGER WITH SD CARD PERSISTENCE
    Version: 4.0
