@@ -19,6 +19,10 @@ int d2  = 17;
 int d3  = 21;
 bool onebit = false; // using full 4-bit wiring
 
+// true once the host writes a sector this session. on exit it tells us the card
+// changed and needs a rescan (read-only browsing doesnt)
+static volatile bool s_usbWroteData = false;
+
 // --------------------- Callbacks ---------------------
 
 static int32_t onWrite(uint32_t lba, uint32_t offset, uint8_t *buffer, uint32_t bufsize) {
@@ -26,6 +30,7 @@ static int32_t onWrite(uint32_t lba, uint32_t offset, uint8_t *buffer, uint32_t 
   if (!secSize) {
     return false;  // disk error
   }
+  s_usbWroteData = true;
   for (int x = 0; x < bufsize / secSize; x++) {
     if (!SD_MMC.writeRAW(buffer + secSize * x, lba + x)) {
       return false;
@@ -59,6 +64,9 @@ static void usbEventCallback(void*, esp_event_base_t event_base,
     switch (event_id) {
       case ARDUINO_USB_STOPPED_EVENT:
         // Host ejected the drive > switch back to Media on next boot
+        if (s_usbWroteData) {
+          set_needs_reindex_flag();
+        }
         set_boot_mode(MEDIA_MODE);
         esp_restart();
         break;
@@ -101,6 +109,9 @@ void usb_loop() {
   delay(0);  // avoid watchdog
 
   if (digitalRead(BOOT_BUTTON_PIN) == LOW) {
+    if (s_usbWroteData) {
+      set_needs_reindex_flag();
+    }
     set_boot_mode(MEDIA_MODE);
     esp_restart();
   }
