@@ -5,41 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
     <title>Comic Reader - Nomad</title>
     <link rel="stylesheet" href="/master.css">
-    <script>
-(function() {
-  try {
-    const isDark = localStorage.getItem('nomad_dark_mode') === 'true';
-    if (isDark) document.documentElement.classList.add('dark');
-
-    const saved = localStorage.getItem('nomad_custom_theme');
-    if (saved) {
-      const colors = JSON.parse(saved);
-      const style = document.createElement('style');
-      style.id = 'custom-theme-style';
-      style.textContent = `
-        :root {
-          --primary: ${colors.primary} !important;
-          --primary-dark: ${colors.primaryDark} !important;
-          --bg: ${colors.bgLight} !important;
-          --card: ${colors.cardLight} !important;
-          --card-bg: ${colors.cardLight} !important;
-          --text: ${colors.textLight} !important;
-          --muted: ${colors.mutedLight} !important;
-        }
-        body.dark {
-          --bg: ${colors.bgDark} !important;
-          --card: ${colors.cardDark} !important;
-          --card-bg: ${colors.cardDark} !important;
-          --text: ${colors.textDark} !important;
-          --muted: ${colors.mutedDark} !important;
-          --primary: ${colors.primaryDarkTheme} !important;
-        }
-      `;
-      document.head.appendChild(style);
-    }
-  } catch(e) {}
-})();
-</script>
+    <script src="/theme-boot.js"></script>
     <script src="/assets/pako.min.js"></script>
     <script src="/assets/uncompress.js"></script>
     <script src="/assets/libunrar.js"></script>
@@ -431,40 +397,27 @@
     let   direction   = localStorage.getItem('nomad_comic_direction') || 'ltr';
     let   currentPage = 0;
     const blobURLs    = {};
-    const loading     = new Set();
     const PRELOAD     = 4;
-    let   archive     = null;
+    const UNLOAD_MARGIN = 25; // pages this far from the current one get their decoded image freed
 
     let cbzFetchQueue = Promise.resolve();
     let requestCounter = 0;
 
+    // firmware keeps one shared file handle per path, so two range requests for the
+    // same archive seek out from under each other. queue them one-at-a-time to avoid it
     function serializeCBZFetch(url, options) {
         const myRequestId = ++requestCounter;
-        const rangeHeader = options?.headers?.Range || 'no-range';
 
         const executeRequest = async () => {
-            console.log(`[Queue] Request ${myRequestId} starting: ${rangeHeader}`);
-            try {
-                const response = await fetch(url, options);
-                if (!response.ok) {
-                    console.log(`[Queue] Request ${myRequestId} failed: ${response.status}`);
-                    return response;
-                }
+            const response = await fetch(url, options);
+            if (!response.ok) return response;
 
-                const buffer = await response.arrayBuffer();
-                console.log(`[Queue] Request ${myRequestId} completed: ${buffer.byteLength} bytes`);
-                await new Promise(r => setTimeout(r, 150));
-
-                return new Response(buffer, {
-                    status: response.status,
-                    statusText: response.statusText,
-                    headers: response.headers
-                });
-            } catch (error) {
-                console.log(`[Queue] Request ${myRequestId} error:`, error.message);
-                await new Promise(r => setTimeout(r, 150));
-                throw error;
-            }
+            const buffer = await response.arrayBuffer();
+            return new Response(buffer, {
+                status: response.status,
+                statusText: response.statusText,
+                headers: response.headers
+            });
         };
 
         const myTask = cbzFetchQueue.then(executeRequest, executeRequest);
@@ -554,6 +507,78 @@
         }
     }
 
+    // the central-dir local-header offset is exact per spec, so read a small chunk right
+    // there, check the signature/name, and use the LOCAL header's lengths. only fall back
+    // to a wide window scan (256KB+/file) if that direct read fails, for weird archives
+    async function locateEntryFast(fileUrl, fileSize, entry) {
+        const headerSize = Math.min(fileSize - entry.hintOffset, 30 + entry.fileNameLength + 256);
+        const resp = await serializeCBZFetch(fileUrl, {
+            headers: { 'Range': `bytes=${entry.hintOffset}-${entry.hintOffset + headerSize - 1}` }
+        });
+        if (!resp.ok) return null;
+
+        const data = await resp.arrayBuffer();
+        if (data.byteLength < 30 + entry.fileNameLength) return null;
+        const view = new DataView(data);
+
+        if (view.getUint32(0, true) !== 0x04034b50) return null;
+
+        const fnLen = view.getUint16(26, true);
+        const extraLen = view.getUint16(28, true);
+        if (fnLen !== entry.fileNameLength || data.byteLength < 30 + fnLen + extraLen) return null;
+
+        const nameBytes = new Uint8Array(data, 30, fnLen);
+        if (new TextDecoder().decode(nameBytes) !== entry.filename) return null;
+
+        return {
+            localHeaderOffset: entry.hintOffset,
+            dataOffset: entry.hintOffset + 30 + fnLen + extraLen,
+            compressionMethod: entry.compressionMethod,
+            compressedSize: entry.compressedSize,
+            uncompressedSize: entry.uncompressedSize
+        };
+    }
+
+    async function locateEntryBySearch(fileUrl, fileSize, entry) {
+        const searchRange = 128 * 1024;
+        const searchStart = Math.max(0, entry.hintOffset - searchRange);
+        const searchEnd = Math.min(fileSize, entry.hintOffset + searchRange);
+
+        const searchResponse = await serializeCBZFetch(fileUrl, {
+            headers: { 'Range': `bytes=${searchStart}-${searchEnd - 1}` }
+        });
+        if (!searchResponse.ok) return null;
+
+        const searchData = await searchResponse.arrayBuffer();
+        const searchView = new DataView(searchData);
+
+        for (let j = 0; j < searchData.byteLength - 30; j++) {
+            if (searchView.getUint32(j, true) !== 0x04034b50) continue;
+
+            const fnLen = searchView.getUint16(j + 26, true);
+            if (j + 30 + fnLen > searchData.byteLength) continue;
+
+            const nameBytes = new Uint8Array(searchData, j + 30, fnLen);
+            if (new TextDecoder().decode(nameBytes) !== entry.filename) continue;
+
+            const actualOffset = searchStart + j;
+            const extraLen = searchView.getUint16(j + 28, true);
+            return {
+                localHeaderOffset: actualOffset,
+                dataOffset: actualOffset + 30 + fnLen + extraLen,
+                compressionMethod: searchView.getUint16(j + 8, true),
+                compressedSize: searchView.getUint32(j + 18, true),
+                uncompressedSize: searchView.getUint32(j + 22, true)
+            };
+        }
+        return null;
+    }
+
+    async function locateEntry(fileUrl, fileSize, entry) {
+        return (await locateEntryFast(fileUrl, fileSize, entry)) ||
+               (await locateEntryBySearch(fileUrl, fileSize, entry));
+    }
+
     async function loadCBZFile() {
         setStatus('Connecting to CBZ file…');
         console.log('[ComicReader] Opening CBZ with on-demand loading:', comicPath);
@@ -637,6 +662,7 @@
             if (imageExts.test(fileName)) {
                 tempEntries.push({
                     filename: fileName,
+                    fileNameLength: fileNameLength,
                     hintOffset: localHeaderOffset,
                     compressedSize: compressedSize,
                     uncompressedSize: uncompressedSize,
@@ -655,54 +681,16 @@
 
         for (let i = 0; i < itemsToVerify; i++) {
             const entry = tempEntries[i];
-            const searchRange = 128 * 1024;
-            const searchStart = Math.max(0, entry.hintOffset - searchRange);
-            const searchEnd = Math.min(fileSize, entry.hintOffset + searchRange);
+            const loc = await locateEntry(fileUrl, fileSize, entry);
 
-            const searchResponse = await serializeCBZFetch(fileUrl, {
-                headers: { 'Range': `bytes=${searchStart}-${searchEnd - 1}` }
-            });
-
-            if (!searchResponse.ok) continue;
-
-            const searchData = await searchResponse.arrayBuffer();
-            const searchView = new DataView(searchData);
-
-            let found = false;
-            for (let j = 0; j < searchData.byteLength - 30; j++) {
-                if (searchView.getUint32(j, true) === 0x04034b50) {
-                    const fnLen = searchView.getUint16(j + 26, true);
-
-                    if (j + 30 + fnLen <= searchData.byteLength) {
-                        const nameBytes = new Uint8Array(searchData, j + 30, fnLen);
-                        const fileName = new TextDecoder().decode(nameBytes);
-
-                        if (fileName === entry.filename) {
-                            const actualOffset = searchStart + j;
-                            const actualCompressionMethod = searchView.getUint16(j + 8, true);
-                            const actualCompressedSize = searchView.getUint32(j + 18, true);
-                            const actualUncompressedSize = searchView.getUint32(j + 22, true);
-                            const extraLen = searchView.getUint16(j + 28, true);
-                            const dataOffset = actualOffset + 30 + fnLen + extraLen;
-
-                            entries.push({
-                                type: 'cbz',
-                                filename: entry.filename,
-                                localHeaderOffset: actualOffset,
-                                dataOffset: dataOffset,
-                                compressedSize: actualCompressedSize,
-                                uncompressedSize: actualUncompressedSize,
-                                compressionMethod: actualCompressionMethod,
-                                fileUrl: fileUrl
-                            });
-                            found = true;
-                            break;
-                        }
-                    }
-                }
-            }
-
-            if (!found) {
+            if (loc) {
+                entries.push({
+                    type: 'cbz',
+                    filename: entry.filename,
+                    fileUrl: fileUrl,
+                    ...loc
+                });
+            } else {
                 console.warn('[ComicReader] Could not locate:', entry.filename);
             }
 
@@ -731,112 +719,67 @@
             (async () => {
                 for (let i = PRIORITY_COUNT; i < tempEntries.length; i++) {
                     const entry = tempEntries[i];
-                    const searchRange = 128 * 1024;
-                    const searchStart = Math.max(0, entry.hintOffset - searchRange);
-                    const searchEnd = Math.min(fileSize, entry.hintOffset + searchRange);
+                    const loc = await locateEntry(fileUrl, fileSize, entry);
 
-                    const searchResponse = await serializeCBZFetch(fileUrl, {
-                        headers: { 'Range': `bytes=${searchStart}-${searchEnd - 1}` }
-                    });
+                    if (loc) {
+                        entries.push({
+                            type: 'cbz',
+                            filename: entry.filename,
+                            fileUrl: fileUrl,
+                            ...loc
+                        });
 
-                    if (!searchResponse.ok) {
-                        if (i % 20 === 0) {
-                            console.log(`[ComicReader] Background verification progress: ${i}/${tempEntries.length}`);
+                        entries.sort((a, b) =>
+                            a.filename.localeCompare(b.filename, undefined, { numeric: true, sensitivity: 'base' })
+                        );
+
+                        const newIndex = entries.findIndex(e => e.filename === entry.filename);
+
+                        const reader = document.getElementById('reader');
+                        const wrapper = document.createElement('div');
+                        wrapper.className = 'page-wrapper';
+                        wrapper.id = `page-wrapper-${newIndex}`;
+                        wrapper.dataset.index = newIndex;
+
+                        const placeholder = document.createElement('div');
+                        placeholder.className = 'page-placeholder';
+                        placeholder.id = `placeholder-${newIndex}`;
+                        wrapper.appendChild(placeholder);
+
+                        const img = document.createElement('img');
+                        img.id = `img-${newIndex}`;
+                        img.className = 'comic-page';
+                        img.alt = `Page ${newIndex + 1}`;
+                        img.dataset.loaded = 'false';
+                        img.dataset.retryCount = '0';
+                        img.style.display = 'none';
+                        wrapper.appendChild(img);
+
+                        if (newIndex >= reader.children.length) {
+                            reader.appendChild(wrapper);
+                        } else {
+                            reader.insertBefore(wrapper, reader.children[newIndex]);
                         }
-                        continue;
-                    }
 
-                    const searchData = await searchResponse.arrayBuffer();
-                    const searchView = new DataView(searchData);
-
-                    let found = false;
-                    for (let j = 0; j < searchData.byteLength - 30; j++) {
-                        if (searchView.getUint32(j, true) === 0x04034b50) {
-                            const fnLen = searchView.getUint16(j + 26, true);
-
-                            if (j + 30 + fnLen <= searchData.byteLength) {
-                                const nameBytes = new Uint8Array(searchData, j + 30, fnLen);
-                                const fileName = new TextDecoder().decode(nameBytes);
-
-                                if (fileName === entry.filename) {
-                                    const actualOffset = searchStart + j;
-                                    const actualCompressionMethod = searchView.getUint16(j + 8, true);
-                                    const actualCompressedSize = searchView.getUint32(j + 18, true);
-                                    const actualUncompressedSize = searchView.getUint32(j + 22, true);
-                                    const extraLen = searchView.getUint16(j + 28, true);
-                                    const dataOffset = actualOffset + 30 + fnLen + extraLen;
-
-                                    const oldLength = entries.length;
-                                    entries.push({
-                                        type: 'cbz',
-                                        filename: entry.filename,
-                                        localHeaderOffset: actualOffset,
-                                        dataOffset: dataOffset,
-                                        compressedSize: actualCompressedSize,
-                                        uncompressedSize: actualUncompressedSize,
-                                        compressionMethod: actualCompressionMethod,
-                                        fileUrl: fileUrl
-                                    });
-
-                                    entries.sort((a, b) =>
-                                        a.filename.localeCompare(b.filename, undefined, { numeric: true, sensitivity: 'base' })
-                                    );
-
-                                    const newIndex = entries.findIndex(e => e.filename === fileName);
-
-                                    const reader = document.getElementById('reader');
-                                    const wrapper = document.createElement('div');
-                                    wrapper.className = 'page-wrapper';
-                                    wrapper.id = `page-wrapper-${newIndex}`;
-                                    wrapper.dataset.index = newIndex;
-
-                                    const placeholder = document.createElement('div');
-                                    placeholder.className = 'page-placeholder';
-                                    placeholder.id = `placeholder-${newIndex}`;
-                                    wrapper.appendChild(placeholder);
-
-                                    const img = document.createElement('img');
-                                    img.id = `img-${newIndex}`;
-                                    img.className = 'comic-page';
-                                    img.alt = `Page ${newIndex + 1}`;
-                                    img.dataset.loaded = 'false';
-                                    img.dataset.retryCount = '0';
-                                    img.style.display = 'none';
-                                    wrapper.appendChild(img);
-
-                                    if (newIndex >= reader.children.length) {
-                                        reader.appendChild(wrapper);
-                                    } else {
-                                        reader.insertBefore(wrapper, reader.children[newIndex]);
-                                    }
-
-                                    for (let k = newIndex + 1; k < reader.children.length; k++) {
-                                        const child = reader.children[k];
-                                        child.id = `page-wrapper-${k}`;
-                                        child.dataset.index = k;
-                                        const childPlaceholder = child.querySelector('.page-placeholder');
-                                        if (childPlaceholder) childPlaceholder.id = `placeholder-${k}`;
-                                        const childImg = child.querySelector('.comic-page');
-                                        if (childImg) {
-                                            childImg.id = `img-${k}`;
-                                            childImg.alt = `Page ${k + 1}`;
-                                        }
-                                    }
-
-                                    if (mode === 'webtoon' && observer) {
-                                        observer.observe(wrapper);
-                                    }
-
-                                    updateIndicator();
-
-                                    found = true;
-                                    break;
-                                }
+                        for (let k = newIndex + 1; k < reader.children.length; k++) {
+                            const child = reader.children[k];
+                            child.id = `page-wrapper-${k}`;
+                            child.dataset.index = k;
+                            const childPlaceholder = child.querySelector('.page-placeholder');
+                            if (childPlaceholder) childPlaceholder.id = `placeholder-${k}`;
+                            const childImg = child.querySelector('.comic-page');
+                            if (childImg) {
+                                childImg.id = `img-${k}`;
+                                childImg.alt = `Page ${k + 1}`;
                             }
                         }
-                    }
 
-                    if (!found) {
+                        if (mode === 'webtoon' && observer) {
+                            observer.observe(wrapper);
+                        }
+
+                        updateIndicator();
+                    } else {
                         console.warn('[ComicReader] Could not locate:', entry.filename);
                     }
 
@@ -1030,49 +973,42 @@
         }
     }
 
-    function rebuildReaderPages() {
-        const reader = document.getElementById('reader');
-        const existingCount = reader.querySelectorAll('.page-wrapper').length;
+    let observer = null;
 
-        for (let idx = existingCount; idx < entries.length; idx++) {
-            const entry = entries[idx];
-            const wrapper = document.createElement('div');
-            wrapper.className = 'page-wrapper';
-            wrapper.id = `page-wrapper-${idx}`;
-            wrapper.dataset.index = idx;
+    // long comics crash low-memory devices if every decoded page stays resident.
+    // CBZ/folder pages re-fetch cheaply, so drop any page past UNLOAD_MARGIN and let it
+    // re-decode. RAR is excluded - the whole archive is already in memory anyway
+    function unloadPage(idx) {
+        const entry = entries[idx];
+        const url = blobURLs[idx];
+        if (!entry || !url || entry.type === 'rar') return;
 
+        URL.revokeObjectURL(url);
+        delete blobURLs[idx];
+
+        const img = document.getElementById(`img-${idx}`);
+        if (img) {
+            img.removeAttribute('src');
+            img.style.display = 'none';
+            img.dataset.loaded = 'false';
+            img.dataset.retryCount = '0';
+        }
+
+        const wrapper = document.getElementById(`page-wrapper-${idx}`);
+        if (wrapper && !document.getElementById(`placeholder-${idx}`)) {
             const placeholder = document.createElement('div');
             placeholder.className = 'page-placeholder';
             placeholder.id = `placeholder-${idx}`;
-            wrapper.appendChild(placeholder);
-
-            const img = document.createElement('img');
-            img.id = `img-${idx}`;
-            img.className = 'comic-page';
-            img.alt = `Page ${idx + 1}`;
-            img.dataset.loaded = 'false';
-            img.dataset.retryCount = '0';
-            img.style.display = 'none';
-            wrapper.appendChild(img);
-
-            reader.appendChild(wrapper);
+            wrapper.insertBefore(placeholder, img || null);
         }
-
-        if (mode === 'webtoon' && observer) {
-            reader.querySelectorAll('.page-wrapper').forEach(w => {
-                if (!w.dataset.observed) {
-                    observer.observe(w);
-                    w.dataset.observed = 'true';
-                }
-            });
-        }
-
-        console.log(`[ComicReader] Rebuilt reader: added ${entries.length - existingCount} new pages (total: ${entries.length})`);
     }
 
-
-
-    let observer = null;
+    function unloadFarPages(centerIdx) {
+        for (const key of Object.keys(blobURLs)) {
+            const idx = parseInt(key, 10);
+            if (Math.abs(idx - centerIdx) > UNLOAD_MARGIN) unloadPage(idx);
+        }
+    }
 
     function setupWebtoonObserver() {
         if (observer) observer.disconnect();
@@ -1092,6 +1028,7 @@
                 currentPage = topVisible;
                 updateIndicator();
                 localStorage.setItem('comic_page_' + comicPath, topVisible);
+                unloadFarPages(topVisible);
             }
         }, {
             root: null,
@@ -1109,32 +1046,6 @@
     function scrollToPage(idx) {
         const el = document.getElementById(`page-wrapper-${idx}`);
         if (el) el.scrollIntoView({ behavior: 'smooth', block: 'start' });
-    }
-
-    function goToPage(idx) {
-        if (idx < 0) idx = 0;
-        if (idx >= entries.length) idx = entries.length - 1;
-        currentPage = idx;
-
-        document.querySelectorAll('.page-wrapper').forEach(w => {
-            w.classList.remove('active');
-        });
-        const wrapper = document.getElementById(`page-wrapper-${idx}`);
-        if (wrapper) wrapper.classList.add('active');
-
-        decodeImage(idx);
-        for (let i = idx + 1; i < Math.min(entries.length, idx + PRELOAD); i++) {
-            decodeImage(i);
-        }
-        updateIndicator();
-        localStorage.setItem('comic_page_' + comicPath, idx);
-    }
-
-    function prevPage() {
-        if (currentPage > 0) goToPage(currentPage - 1);
-    }
-    function nextPage() {
-        if (currentPage < entries.length - 1) goToPage(currentPage + 1);
     }
 
     async function decodeImage(idx) {
@@ -1164,40 +1075,7 @@
             let blob;
 
             if (entry.type === 'cbz') {
-                console.log(`[ComicReader] Loading page ${idx}: ${entry.filename} at offset ${entry.localHeaderOffset}`);
-
-                if (!entry.dataOffset) {
-                    console.log(`[ComicReader] No dataOffset cached, fetching header for page ${idx}`);
-                    const headerSize = 30 + 256;
-                    const localHeaderResponse = await serializeCBZFetch(entry.fileUrl, {
-                        headers: { 'Range': `bytes=${entry.localHeaderOffset}-${entry.localHeaderOffset + headerSize - 1}` }
-                    });
-
-                    if (!localHeaderResponse.ok) {
-                        throw new Error('Failed to fetch local header: ' + localHeaderResponse.statusText);
-                    }
-
-                    const localHeaderData = await localHeaderResponse.arrayBuffer();
-                    const localHeaderView = new DataView(localHeaderData);
-
-                    const signature = localHeaderView.getUint32(0, true);
-                    console.log(`[ComicReader] Local header signature: 0x${signature.toString(16)} (expected 0x04034b50)`);
-
-                    if (signature !== 0x04034b50) {
-                        throw new Error(`Invalid local file header signature: 0x${signature.toString(16)}`);
-                    }
-
-                    const localFileNameLength = localHeaderView.getUint16(26, true);
-                    const localExtraFieldLength = localHeaderView.getUint16(28, true);
-
-                    console.log(`[ComicReader] Filename length: ${localFileNameLength}, Extra: ${localExtraFieldLength}`);
-
-                    entry.dataOffset = entry.localHeaderOffset + 30 + localFileNameLength + localExtraFieldLength;
-                }
-
                 const dataEnd = entry.dataOffset + entry.compressedSize - 1;
-
-                console.log(`[ComicReader] Fetching image data: bytes ${entry.dataOffset}-${dataEnd} (${entry.compressedSize} bytes, method ${entry.compressionMethod})`);
 
                 const imageDataResponse = await serializeCBZFetch(entry.fileUrl, {
                     headers: { 'Range': `bytes=${entry.dataOffset}-${dataEnd}` }
@@ -1210,17 +1088,13 @@
                 let imageData = await imageDataResponse.arrayBuffer();
 
                 if (entry.compressionMethod === 8) {
-                    console.log(`[ComicReader] Decompressing ${entry.compressedSize} bytes -> ${entry.uncompressedSize} bytes`);
                     const compressed = new Uint8Array(imageData);
-                    const decompressed = pako.inflateRaw(compressed);
-                    imageData = decompressed.buffer;
-                    console.log(`[ComicReader] Decompressed to ${imageData.byteLength} bytes`);
+                    imageData = pako.inflateRaw(compressed).buffer;
                 } else if (entry.compressionMethod !== 0) {
                     throw new Error('Unsupported compression method: ' + entry.compressionMethod);
                 }
 
                 blob = new Blob([imageData]);
-                console.log(`[ComicReader] Page ${idx} loaded successfully`);
             } else if (entry.type === 'rar') {
                 blob = new Blob([entry.data]);
             } else {
@@ -1237,6 +1111,9 @@
                 img.style.display = 'block';
                 img.dataset.loaded = 'true';
                 img.dataset.retryCount = '0';
+                // the Blob already copied the bytes, so once decoded drop the raw
+                // extracted copy (matters for CBR, the whole archive is in memory)
+                if (entry.type === 'rar') entry.data = null;
             };
 
             img.onerror = () => {
@@ -1348,6 +1225,7 @@
 
         updateIndicator();
         localStorage.setItem('comic_page_' + comicPath, idx);
+        unloadFarPages(idx);
     }
 
     function prevPage() {
