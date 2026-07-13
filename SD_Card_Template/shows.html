@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<!-- Version 2.2 -->
+<!-- Version 4 -->
 <html lang="en">
 <head>
 <meta charset="utf-8" />
@@ -7,41 +7,8 @@
 <title>Nomad • Shows</title>
 <link rel="stylesheet" href="assets/plyr.css" />
 <link rel="stylesheet" href="/master.css">
-<script>
-(function() {
-  try {
-    const isDark = localStorage.getItem('nomad_dark_mode') === 'true';
-    if (isDark) document.documentElement.classList.add('dark');
-
-    const saved = localStorage.getItem('nomad_custom_theme');
-    if (saved) {
-      const colors = JSON.parse(saved);
-      const style = document.createElement('style');
-      style.id = 'custom-theme-style';
-      style.textContent = `
-        :root {
-          --primary: ${colors.primary} !important;
-          --primary-dark: ${colors.primaryDark} !important;
-          --bg: ${colors.bgLight} !important;
-          --card: ${colors.cardLight} !important;
-          --card-bg: ${colors.cardLight} !important;
-          --text: ${colors.textLight} !important;
-          --muted: ${colors.mutedLight} !important;
-        }
-        body.dark {
-          --bg: ${colors.bgDark} !important;
-          --card: ${colors.cardDark} !important;
-          --card-bg: ${colors.cardDark} !important;
-          --text: ${colors.textDark} !important;
-          --muted: ${colors.mutedDark} !important;
-          --primary: ${colors.primaryDarkTheme} !important;
-        }
-      `;
-      document.head.appendChild(style);
-    }
-  } catch(e) {}
-})();
-</script>
+<script src="/theme-boot.js"></script>
+<script src="/nomad-utils.js"></script>
 <script src="assets/plyr.min.js"></script>
 <script src="/theme-manager.js"></script>
 <style>
@@ -92,7 +59,7 @@
   .thumb-wrapper{position:relative;display:flex;align-items:center;justify-content:center;background:var(--thumb-bg);color:var(--thumb-text);font-size:0.9rem;text-align:center;width:100%;aspect-ratio:2/3;overflow:hidden;}
   .fallback-text{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;z-index:2;text-align:center;font-weight:700;color:var(--thumb-title);pointer-events:none;padding:6px}
   .media-thumb{display:block;width:100%;height:100%;object-fit:cover;position:absolute;top:0;left:0;z-index:1;opacity:0;transition:opacity .35s ease;}
-  .badge-resume{position:absolute;left:50%;transform:translateX(-50%);bottom:8px;background:var(--overlay-badge);color:var(--color-white);padding:6px 10px;border-radius:999px;font-weight:700;font-size:12px;z-index:4;display:block;min-width:40px;max-width:85%;overflow:hidden}
+  .badge-resume{position:absolute;left:50%;transform:translateX(-50%);bottom:8px;background:rgba(0,0,0,0.6);color:#fff;padding:6px 10px;border-radius:999px;font-weight:700;font-size:12px;z-index:4;display:block;min-width:40px;max-width:85%;overflow:hidden}
   .marquee{display:block;white-space:nowrap;overflow:hidden;position:relative;height:18px}
   .m-inner{display:inline-block;white-space:nowrap}
   .m-inner span{display:inline-block;padding-right:40px}
@@ -103,36 +70,52 @@
   .modal,.episode-modal,.video-modal{display:none;position:fixed;inset:0;background:var(--overlay-modal);justify-content:center;align-items:center;z-index:1000;padding:20px;}
   .modal-content,.episode-modal-content{background:var(--card-bg);color:var(--text);padding:18px;border-radius:var(--radius);text-align:center;width:94%;max-width:980px;box-shadow:var(--shadow-large);max-height:90vh;overflow:auto}
   .video-modal-content{
-    background:var(--dark-bg-secondary);
-    padding:18px;
+    background:var(--card-bg);
+    color:var(--text);
+    padding:14px;
     border-radius:var(--radius);
-    width:95%;
+    width:100%;
     max-width:980px;
     box-shadow:var(--shadow-large);
-    max-height:80vh;
     display:flex;
     flex-direction:column;
     align-items:center;
     gap:12px;
-    overflow:hidden;
-  }
-
-  .video-container video {
-    background:var(--color-black) !important;
   }
 
   .modal button,.episode-modal button,.video-modal button{padding:10px 12px;font-size:0.98rem;border-radius:var(--radius);border:0;cursor:pointer}
   .modal button:not(.cancel):not(.secondary){background:var(--primary);color:var(--color-white);width:100%}
-  .modal button.secondary{background:var(--btn-light-bg);color:var(--primary);border:1px solid var(--primary-alpha-12);width:100%}
-  .modal button.cancel{background:var(--color-white);color:var(--text);border:1px solid var(--line);width:100%}
+  .modal button.secondary{background:transparent;color:var(--primary);border:1px solid var(--primary);width:100%}
+  .modal button.cancel{background:transparent;color:var(--text);border:1px solid var(--line);width:100%}
+  /* action modal: even spacing between stacked buttons (like movies/books). scoped to #actionModal so the episode picker is untouched */
+  #actionModal .modal-content{display:flex;flex-direction:column;gap:10px}
+  #actionModal .modal-content h2{margin:0;font-size:1.15rem;font-weight:700}
+  #actionSub{font-size:0.9rem;color:var(--muted)}
+  /* episode picker's Resume/Close buttons live in .episode-modal, which the rules above
+     never covered, so they were unreadable in dark. token colors flip on their own */
+  .episode-modal button.secondary{background:transparent;color:var(--primary);border:1px solid var(--primary);width:100%;font-weight:700}
+  .episode-modal button.cancel{background:var(--card);color:var(--text);border:1px solid var(--line);width:100%}
   .episode-list{max-height:60vh;overflow-y:auto;text-align:left;padding:6px}
   .episode-list .ep-row{display:flex;align-items:center;gap:6px;padding:6px;border-bottom:1px solid var(--line)}
   .episode-list .ep-row button{flex:1;background:var(--primary);border:0;color:var(--color-white);text-align:center;padding:8px;border-radius:var(--radius);cursor:pointer;font-weight:700;font-size:0.95rem}
   .season-toggle{display:flex;align-items:center;justify-content:space-between;padding:8px;background:var(--primary);color:var(--color-white);border-radius:var(--radius);margin:6px 0;cursor:pointer;font-weight:700}
   .season-content{padding-left:6px;padding-right:6px;margin-bottom:6px}
 
-  .video-container{display:flex;flex-direction:column;align-items:center;gap:10px;width:100%;padding:6px;box-sizing:border-box}
-  .video-container video{ width:100%; object-fit:contain; display:block; }
+  .video-container{ width:100%; display:flex;flex-direction:column;align-items:center;gap:8px; }
+  .video-container video{ width:100%; border-radius:var(--radius); }
+  .video-actions{ display:flex; width:100%; gap:10px; }
+  .video-actions button{
+    flex:1;
+    padding:10px 14px;
+    font-size:0.95rem;
+    border:none;
+    border-radius:var(--radius);
+    cursor:pointer;
+    background:var(--primary);
+    color:var(--color-white);
+    transition:filter .18s ease;
+  }
+  .video-actions button:hover{ filter:brightness(0.96); }
   .plyr {
     --plyr-color-main: var(--primary);
     --plyr-video-controls-background: var(--overlay-video);
@@ -157,7 +140,7 @@
       display: none !important;
     }
   }
-  .video-title{font-weight:700;color:var(--color-white);margin-bottom:6px; text-align:center; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; max-width:100%}
+  .video-title{font-weight:700;color:var(--color-white);margin:0; text-align:center; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; max-width:100%}
   body.dark .back-btn { background: var(--white-alpha-12); color: var(--color-white); }
   body.dark .view-btn.active { border-color: var(--primary); }
 </style>
@@ -197,22 +180,22 @@
   <div id="actionModal" class="modal" role="dialog" aria-modal="true">
     <div class="modal-content" role="document">
       <h2 id="actionTitle">Play / Download</h2>
-      <div id="actionSub" style="margin-bottom:8px;color:#444"></div>
+      <div id="actionSub"></div>
       <button id="playButton">Play (from start)</button>
       <button id="downloadButton" class="cancel">Download</button>
-      <div style="margin-top:8px"><button id="actionCloseBtn" class="cancel">Cancel</button></div>
+      <button id="actionCloseBtn" class="cancel">Cancel</button>
     </div>
   </div>
 
   <div id="videoModal" class="video-modal" role="dialog" aria-modal="true">
     <div class="video-modal-content" role="document">
+      <div id="videoTitle" class="video-title"></div>
       <div class="video-container">
-        <div id="videoTitle" class="video-title"></div>
         <video id="videoPlayer" controls playsinline aria-label="Video player"></video>
-        <div class="video-actions">
-          <button id="videoCloseBtn" class="cancel">Close</button>
-          <button id="videoNextBtn">Next</button>
-        </div>
+      </div>
+      <div class="video-actions">
+        <button id="videoCloseBtn">Close</button>
+        <button id="videoNextBtn">Next</button>
       </div>
     </div>
   </div>
@@ -299,8 +282,8 @@ function applyThemeFlag(dark){
       b.style.color = '#fff';
     });
 
-    // Modal content backgrounds & text
-    document.querySelectorAll('.modal-content, .episode-modal-content, .video-modal-content').forEach(el => {
+    // modal bg + text (action modal uses theme-token CSS now, so its excluded here)
+    document.querySelectorAll('.episode-modal-content, .video-modal-content').forEach(el => {
       if(dark){
         el.style.background = '#071722';
         el.style.color = '#eaf6ff';
@@ -344,30 +327,7 @@ function applyThemeFlag(dark){
       }
     });
 
-    // Buttons in modals: cancel/secondary
-    document.querySelectorAll('.modal button.cancel, .episode-modal button.cancel, .video-modal button.cancel').forEach(b => {
-      if(dark){
-        b.style.background = '#0b1220';
-        b.style.color = '#eaf6ff';
-        b.style.border = '1px solid rgba(255,255,255,0.06)';
-      } else {
-        b.style.background = '#fff';
-        b.style.color = '#333';
-        b.style.border = '1px solid #e6e9ef';
-      }
-    });
-
-    document.querySelectorAll('.modal button.secondary').forEach(b => {
-      if(dark){
-        b.style.background = '#0f2340';
-        b.style.color = '#a9d3ff';
-        b.style.border = '1px solid rgba(255,255,255,0.06)';
-      } else {
-        b.style.background = '#f6f9ff';
-        b.style.color = 'var(--primary)';
-        b.style.border = '1px solid rgba(0,123,255,0.12)';
-      }
-    });
+    // cancel/secondary buttons are theme-token CSS now (works for dynamic buttons too), no JS pass needed
 
     // Video player and title
     const videoEl = document.getElementById('videoPlayer');
@@ -433,42 +393,7 @@ let currentEpisodeIndex = -1;
 let autosaveTimer = null;
 let rootSig = null;
 
-/* ---------- Screen wake lock / NoSleep fallback ---------- */
-let wakeLock = null;
-let noSleep = null;
-
-async function requestWakeLock(){
-  try {
-    if ('wakeLock' in navigator) {
-      wakeLock = await navigator.wakeLock.request('screen');
-      wakeLock.addEventListener('release', () => {
-        console.log('Wake Lock released');
-      });
-      console.log('Wake Lock active');
-    } else if (typeof NoSleep !== 'undefined') {
-      if (!noSleep) noSleep = new NoSleep();
-      noSleep.enable();
-      console.log('NoSleep enabled');
-    }
-  } catch(e) {
-    console.warn('requestWakeLock error', e);
-  }
-}
-
-async function releaseWakeLock(){
-  try {
-    if (wakeLock) {
-      await wakeLock.release();
-      wakeLock = null;
-    }
-    if (noSleep) noSleep.disable();
-  } catch(e) {
-    console.warn('releaseWakeLock error', e);
-  }
-}
-
 /* Helpers */
-function normalizePath(p){ if(!p) return '/'; p = String(p); if(!p.startsWith('/')) p='/' + p; while(p.length>1 && p.endsWith('/')) p=p.slice(0,-1); return p; }
 function ext(name){ const i=name.lastIndexOf('.'); return i>=0? name.slice(i).toLowerCase() : ''; }
 function isVideoName(n){ return VIDEO_EXTS.includes(ext(n)); }
 function isImageName(n){ return IMAGE_EXTS.includes(ext(n)); }
@@ -1884,6 +1809,5 @@ sortSelect.addEventListener('change', () => applySort(sortSelect.value));
 
 </body>
 </html>
-
 
 
