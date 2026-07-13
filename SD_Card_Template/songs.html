@@ -5,41 +5,8 @@
 <meta name="viewport" content="width=device-width,initial-scale=1" />
 <title>Songs</title>
 <link rel="stylesheet" href="master.css">
-<script>
-(function() {
-  try {
-    const isDark = localStorage.getItem('nomad_dark_mode') === 'true';
-    if (isDark) document.documentElement.classList.add('dark');
-
-    const saved = localStorage.getItem('nomad_custom_theme');
-    if (saved) {
-      const colors = JSON.parse(saved);
-      const style = document.createElement('style');
-      style.id = 'custom-theme-style';
-      style.textContent = `
-        :root {
-          --primary: ${colors.primary} !important;
-          --primary-dark: ${colors.primaryDark} !important;
-          --bg: ${colors.bgLight} !important;
-          --card: ${colors.cardLight} !important;
-          --card-bg: ${colors.cardLight} !important;
-          --text: ${colors.textLight} !important;
-          --muted: ${colors.mutedLight} !important;
-        }
-        body.dark {
-          --bg: ${colors.bgDark} !important;
-          --card: ${colors.cardDark} !important;
-          --card-bg: ${colors.cardDark} !important;
-          --text: ${colors.textDark} !important;
-          --muted: ${colors.mutedDark} !important;
-          --primary: ${colors.primaryDarkTheme} !important;
-        }
-      `;
-      document.head.appendChild(style);
-    }
-  } catch(e) {}
-})();
-</script>
+<script src="/theme-boot.js"></script>
+<script src="/nomad-utils.js"></script>
 <script src="theme-manager.js"></script>
 <style>
 body{margin:0;padding:0;background:var(--bg);font-family:Inter,Arial,sans-serif;}
@@ -61,8 +28,13 @@ main{padding:14px;max-width:1200px;margin:0 auto;padding-bottom:20px;}
 .row.playing{background:var(--primary);color:var(--color-white);}
 .row .title{font-weight:700;flex:1 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--text);}
 .row.playing .title{color:var(--color-white);}
-.row .context{color:var(--muted);font-weight:600;text-align:right;flex:0 1 auto;max-width:30ch;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+/* album is secondary: smaller, de-emphasized, and capped so it cant crowd the title */
+.row .context{color:var(--muted);font-weight:600;font-size:0.82rem;text-align:right;flex:0 1 auto;max-width:38%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
 .row.playing .context{color:var(--white-alpha-80);}
+/* no room on phones, hide the album so the song name gets the full row. back on wider screens */
+@media (max-width:600px){
+  .row .context{display:none;}
+}
 .add-queue-btn{padding:4px 8px;background:var(--card);border:1px solid var(--black-alpha-10);border-radius:6px;font-size:0.85rem;font-weight:700;color:var(--primary);cursor:pointer;transition:all .15s;margin-left:8px;}
 .add-queue-btn:hover{background:var(--primary);color:var(--color-white);transform:scale(1.05);}
 .row.playing .add-queue-btn{background:var(--white-alpha-20);color:var(--color-white);border-color:var(--white-alpha-30);}
@@ -103,13 +75,6 @@ const allListEl = document.getElementById('allList');
 const totalCountEl = document.getElementById('totalCount');
 const searchEl = document.getElementById('search');
 
-function normalizePath(p){
-  if(!p) return '/';
-  p = String(p);
-  if(!p.startsWith('/')) p = '/' + p;
-  while(p.length > 1 && p.endsWith('/')) p = p.slice(0, -1);
-  return p;
-}
 
 function ext(name){
   const i = name.lastIndexOf('.');
@@ -402,12 +367,6 @@ function render(){
   });
 }
 
-function fisherYates(a){
-  for(let i=a.length-1;i>0;i--){
-    const j=Math.floor(Math.random()*(i+1));
-    [a[i],a[j]]=[a[j],a[i]];
-  }
-}
 
 searchEl.addEventListener('input', render);
 
