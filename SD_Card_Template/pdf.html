@@ -61,22 +61,9 @@
             overflow: hidden;
         }
 
-        body.dark {
-            background: var(--dark-bg-primary);
-            color: var(--dark-text-primary);
-        }
-
-        body.dark .reader-header {
-            background: var(--dark-bg-tertiary);
-        }
-
         body.dark .reader-navigation {
-            background: var(--dark-bg-secondary);
-            border-top-color: var(--white-alpha-4);
-        }
-
-        body.dark #pdf-container {
-            background: var(--dark-bg-secondary);
+            background: var(--card);
+            border-top-color: var(--line);
         }
 
         .reader-container {
@@ -88,7 +75,7 @@
 
         .reader-header {
             background: var(--primary);
-            color: var(--color-white);
+            color: var(--header-text);
             padding: 12px 16px;
             display: flex;
             gap: 10px;
@@ -115,9 +102,9 @@
         }
 
         .reader-btn {
-            background: var(--white-alpha-20);
+            background: rgba(255,255,255,0.2);
             border: none;
-            color: var(--color-white);
+            color: var(--header-text);
             padding: 8px 12px;
             border-radius: 5px;
             cursor: pointer;
@@ -168,8 +155,10 @@
             position: absolute;
             inset: 0;
             display: flex;
+            flex-direction: column;
             justify-content: center;
             align-items: center;
+            gap: 16px;
             background: rgba(250, 250, 250, 0.95);
             z-index: 50;
         }
@@ -189,6 +178,29 @@
             border-top-color: var(--primary);
             border-radius: 50%;
             animation: spin 0.8s linear infinite;
+        }
+
+        .loading-text {
+            color: var(--text);
+            font-size: 0.95rem;
+            font-weight: 600;
+            font-variant-numeric: tabular-nums;
+        }
+
+        .loading-bar {
+            width: min(240px, 70%);
+            height: 6px;
+            border-radius: 3px;
+            background: var(--line);
+            overflow: hidden;
+        }
+
+        .loading-bar-fill {
+            height: 100%;
+            width: 0%;
+            background: var(--primary);
+            border-radius: 3px;
+            transition: width 0.15s ease;
         }
 
         @keyframes spin {
@@ -280,6 +292,7 @@
         }
     </style>
     <script src="theme-manager.js"></script>
+    <script src="/nomad-utils.js"></script>
 </head>
 <body>
     <div class="reader-container">
@@ -296,6 +309,8 @@
             <div id="pdf-container">
                 <div class="loading-overlay" id="loadingOverlay">
                     <div class="spinner"></div>
+                    <div class="loading-bar"><div class="loading-bar-fill" id="loadingBarFill"></div></div>
+                    <div class="loading-text" id="loadingText">Loading…</div>
                 </div>
             </div>
         </div>
@@ -311,15 +326,10 @@
     </div>
 
     <script>
-        const THEME_KEY = 'nomad_dark_mode';
-        function applyThemeFlag(dark) {
-            if (dark) document.body.classList.add('dark');
-            else document.body.classList.remove('dark');
-        }
-        (function () { try { applyThemeFlag(localStorage.getItem(THEME_KEY) === 'true'); } catch (e) { } })();
-        window.addEventListener('storage', (ev) => { if (ev.key === THEME_KEY) applyThemeFlag(ev.newValue === 'true'); });
+        /* theme via shared ThemeManager instead of a local reimplementation */
+        (function () { try { ThemeManager.applyDarkMode(ThemeManager.getDarkMode()); } catch (e) { } })();
+        window.addEventListener('storage', (ev) => { if (ev.key === ThemeManager.STORAGE_KEY) ThemeManager.applyDarkMode(ev.newValue === 'true'); });
 
-        function normalizePath(p) { if (!p) return '/'; p = String(p); if (!p.startsWith('/')) p = '/' + p; while (p.length > 1 && p.endsWith('/')) p = p.slice(0, -1); return p; }
         function fileUrlDirect(path) { if (!path) return ''; return `/media?file=${encodeURIComponent(normalizePath(path))}`; }
         
         const urlParams = new URLSearchParams(window.location.search);
@@ -333,6 +343,8 @@
         const readerTitle = document.getElementById('readerTitle');
         const pdfContainer = document.getElementById('pdf-container');
         const loadingOverlay = document.getElementById('loadingOverlay');
+        const loadingText = document.getElementById('loadingText');
+        const loadingBarFill = document.getElementById('loadingBarFill');
         const prevBtn = document.getElementById('prevBtn');
         const nextBtn = document.getElementById('nextBtn');
         const pageInfo = document.getElementById('pageInfo');
@@ -348,6 +360,8 @@
         let scale = 1.5;
         let renderQueue = new Set();
         let renderedPages = new Set();
+        let observer = null;
+        const UNLOAD_MARGIN = 12; // pages this far from the current one get their canvas freed
 
         const RESUME_KEY = 'nomad_pdf_progress';
         
@@ -379,6 +393,7 @@
             pageInput.max = totalPages;
             prevBtn.disabled = currentPage <= 1;
             nextBtn.disabled = currentPage >= totalPages;
+            unloadFarPages(currentPage);
         }
 
         function updateZoomInfo() {
@@ -422,9 +437,9 @@
                         pdfContainer.appendChild(canvas);
                     }
                 }
-                
+
+                if (observer) observer.observe(canvas);
                 renderedPages.add(pageNum);
-                console.log(`Rendered page ${pageNum}`);
             } catch (err) {
                 console.error(`Failed to render page ${pageNum}:`, err);
             } finally {
@@ -436,6 +451,22 @@
             const canvas = pdfContainer.querySelector(`#page-${pageNum}`);
             if (canvas) {
                 canvas.scrollIntoView({ behavior: 'smooth', block: 'start' });
+            }
+        }
+
+        // each page is a full-res canvas, keeping them all in the DOM eventually runs
+        // out of memory. drop any page more than UNLOAD_MARGIN away, cheap to re-render
+        function unloadFarPages(centerPage) {
+            for (const pageNum of Array.from(renderedPages)) {
+                if (Math.abs(pageNum - centerPage) <= UNLOAD_MARGIN) continue;
+                const canvas = pdfContainer.querySelector(`#page-${pageNum}`);
+                if (canvas) {
+                    if (observer) observer.unobserve(canvas);
+                    canvas.width = 0;
+                    canvas.height = 0;
+                    canvas.remove();
+                }
+                renderedPages.delete(pageNum);
             }
         }
 
@@ -477,14 +508,26 @@
 
             renderedPages.clear();
             renderQueue.clear();
-            pdfContainer.querySelectorAll('.pdf-page').forEach(c => c.remove());
+            pdfContainer.querySelectorAll('.pdf-page').forEach(c => {
+                if (observer) observer.unobserve(c);
+                c.width = 0;
+                c.height = 0;
+                c.remove();
+            });
 
             goToPage(currentPage);
         }
 
+        function setLoadingProgress(pct, label) {
+            if (loadingText) loadingText.textContent = label;
+            if (loadingBarFill) loadingBarFill.style.width = (pct == null ? 0 : Math.max(0, Math.min(100, pct))) + '%';
+        }
+        function fmtMB(bytes) { return (bytes / 1048576).toFixed(1) + ' MB'; }
+
         async function loadPDF(path) {
             try {
                 loadingOverlay.classList.remove('hidden');
+                setLoadingProgress(0, 'Loading…');
 
                 const fileName = path.split('/').pop();
                 readerTitle.textContent = fileName.replace(/\.[^/.]+$/, '').replace(/[_\.]+/g, ' ').trim();
@@ -501,31 +544,26 @@
                 const loadingTask = pdfjsLib.getDocument(url);
 
                 loadingTask.onProgress = (progress) => {
+                    // no Content-Length? show bytes downloaded instead of a %
                     if (progress.total > 0) {
                         const percent = Math.round((progress.loaded / progress.total) * 100);
-                        console.log(`PDF: Loading ${percent}%`);
+                        setLoadingProgress(percent, `Loading ${percent}%`);
+                    } else if (progress.loaded > 0) {
+                        setLoadingProgress(null, `Loading ${fmtMB(progress.loaded)}…`);
                     }
                 };
 
                 pdfDoc = await loadingTask.promise;
                 totalPages = pdfDoc.numPages;
+                setLoadingProgress(100, 'Rendering…');
 
                 console.log(`PDF: Loaded ${totalPages} pages`);
 
                 const progress = loadProgress(path);
                 const startPage = (progress && progress.page > 0 && progress.page <= totalPages) ? progress.page : 1;
-
-                updatePageInfo();
-                updateZoomInfo();
-
-                await renderPage(startPage);
-                loadingOverlay.classList.add('hidden');
-
                 currentPage = startPage;
-                scrollToPage(startPage);
-                preloadPages(startPage);
 
-                const observer = new IntersectionObserver((entries) => {
+                observer = new IntersectionObserver((entries) => {
                     entries.forEach(entry => {
                         if (entry.isIntersecting) {
                             const pageNum = parseInt(entry.target.id.replace('page-', ''));
@@ -539,15 +577,14 @@
                     });
                 }, { threshold: 0.5 });
 
-                const checkAndObserve = setInterval(() => {
-                    const canvases = pdfContainer.querySelectorAll('.pdf-page');
-                    canvases.forEach(canvas => {
-                        if (!canvas.dataset.observed) {
-                            observer.observe(canvas);
-                            canvas.dataset.observed = 'true';
-                        }
-                    });
-                }, 500);
+                updatePageInfo();
+                updateZoomInfo();
+
+                await renderPage(startPage);
+                loadingOverlay.classList.add('hidden');
+
+                scrollToPage(startPage);
+                preloadPages(startPage);
 
                 let lastScrollCheck = 0;
                 pdfContainer.addEventListener('scroll', () => {
@@ -619,5 +656,4 @@
     </script>
 </body>
 </html>
-
 
