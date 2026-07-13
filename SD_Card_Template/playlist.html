@@ -5,41 +5,8 @@
 <meta name="viewport" content="width=device-width,initial-scale=1" />
 <title>Playlists</title>
 <link rel="stylesheet" href="master.css">
-<script>
-(function() {
-  try {
-    const isDark = localStorage.getItem('nomad_dark_mode') === 'true';
-    if (isDark) document.documentElement.classList.add('dark');
-
-    const saved = localStorage.getItem('nomad_custom_theme');
-    if (saved) {
-      const colors = JSON.parse(saved);
-      const style = document.createElement('style');
-      style.id = 'custom-theme-style';
-      style.textContent = `
-        :root {
-          --primary: ${colors.primary} !important;
-          --primary-dark: ${colors.primaryDark} !important;
-          --bg: ${colors.bgLight} !important;
-          --card: ${colors.cardLight} !important;
-          --card-bg: ${colors.cardLight} !important;
-          --text: ${colors.textLight} !important;
-          --muted: ${colors.mutedLight} !important;
-        }
-        body.dark {
-          --bg: ${colors.bgDark} !important;
-          --card: ${colors.cardDark} !important;
-          --card-bg: ${colors.cardDark} !important;
-          --text: ${colors.textDark} !important;
-          --muted: ${colors.mutedDark} !important;
-          --primary: ${colors.primaryDarkTheme} !important;
-        }
-      `;
-      document.head.appendChild(style);
-    }
-  } catch(e) {}
-})();
-</script>
+<script src="/theme-boot.js"></script>
+<script src="/nomad-utils.js"></script>
 <script src="theme-manager.js"></script>
 <style>
 body{margin:0;padding:0;background:var(--bg);font-family:Inter,Arial,sans-serif;}
@@ -109,13 +76,6 @@ const playlistsEl = document.getElementById('playlists');
 const playlistCountEl = document.getElementById('playlistCount');
 const searchEl = document.getElementById('search');
 
-function normalizePath(p){
-  if(!p) return '/';
-  p = String(p);
-  if(!p.startsWith('/')) p = '/' + p;
-  while(p.length > 1 && p.endsWith('/')) p = p.slice(0, -1);
-  return p;
-}
 
 function ext(name){
   const i = name.lastIndexOf('.');
@@ -373,12 +333,6 @@ function render(){
   playlistCountEl.textContent = `${playlistsEl.querySelectorAll('.playlist').length} playlists`;
 }
 
-function fisherYates(a){
-  for(let i=a.length-1;i>0;i--){
-    const j=Math.floor(Math.random()*(i+1));
-    [a[i],a[j]]=[a[j],a[i]];
-  }
-}
 
 function renderPlaylistBody(topPath, bodyEl){
   bodyEl.innerHTML = '';
