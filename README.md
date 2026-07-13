@@ -56,7 +56,7 @@ If you just want to support the project, donations are always appreciated:
 
 ### Offline Wikipedia & Archive Support (ZIM)
 - Browse and search full offline Wikipedia (and other ZIM archives like Gutenberg and TED) directly from the SD card
-- Search is fast even on massive archives, a companion tool prebuilds a compact index on your PC, so the device never has to search the raw multi-gigabyte file itself
+- Search is fast even on massive archives, the companion [Nomad Tools](https://github.com/Jstudner/Nomad-Tools) app prebuilds a compact index on your PC, so the device never has to search the raw multi-gigabyte file itself
 - Embedded videos and epub books inside archives play/read right in the browser
 - Works with zero extra UI cost if you don't use it, no archives on the card means the feature stays completely out of the way
 - Currently tested with Gutenburg epubs, TedX Videos, and wikipedia from the tiny 0.8 file all the way to the 140gb maxi with images. 
@@ -274,7 +274,7 @@ favicon.ico
 - **Audio:** `.mp3, .flac, .wav, .ogg, .aac, .m4a`
 - **Books:** `.pdf, .epub, .cbz, .cbr` 
 - **Images:** `.jpg, .jpeg, .png` 
-- **Archives:** `.zim` (offline Wikipedia and other ZIM-format wikis), needs special processing, you cant just drop a .zim in sadly
+- **Archives:** `.zim` (offline Wikipedia and other ZIM-format wikis), needs special processing, you cant just drop a .zim in sadly. Prep them with [Nomad Tools](https://github.com/Jstudner/Nomad-Tools) first (still rough, but handles most common ZIMs)
 
 ---
 
