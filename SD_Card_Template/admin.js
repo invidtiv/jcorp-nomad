@@ -1,5 +1,7 @@
 // <!-- Version 4 -->
 
+// trust badge next to the SD usage %. statTrusted is only true once a real scan
+// has confirmed the fast stat figure (see the firmware's reconcileStatTrust)
 function renderSdTrustBadge(statTrusted) {
   const badge = document.getElementById('sd-trust-badge');
   if (!badge) return;
@@ -374,6 +376,11 @@ async function loadSettings() {
       document.getElementById('auto-generate').checked = isAutoGenerate;
     }
 
+    // Screen flip (180° rotation)
+    if (s.flipScreen !== undefined) {
+      document.getElementById('flip-screen').checked = !!s.flipScreen;
+    }
+
     // Check authentication
     if (typeof requireAdminAuth === 'function') {
       await requireAdminAuth(s);
@@ -400,7 +407,8 @@ async function saveSettings() {
       wifiSSID: document.getElementById('ssid').value,
       wifiPassword: wifiPassword,
       brightness: parseInt(document.getElementById('brightness').value),
-      autoGenerateMedia: document.getElementById('auto-generate').checked
+      autoGenerateMedia: document.getElementById('auto-generate').checked,
+      flipScreen: document.getElementById('flip-screen').checked
     };
 
     const res = await adminFetch('/settings', {
@@ -1038,6 +1046,15 @@ document.addEventListener('DOMContentLoaded', async () => {
       isAutoGenerate = autoToggle.checked;
       saveSettings();
       addConsoleLog(`Check for new files on boot ${isAutoGenerate ? 'enabled' : 'disabled'}`, 'info');
+    });
+  }
+
+  // Screen flip toggle - firmware applies the rotation live on save
+  const flipToggle = document.getElementById('flip-screen');
+  if (flipToggle) {
+    flipToggle.addEventListener('change', () => {
+      saveSettings();
+      addConsoleLog(`Screen flipped ${flipToggle.checked ? '180° (upside-down mount)' : 'back to normal'}`, 'info');
     });
   }
 
