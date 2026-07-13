@@ -1,5 +1,5 @@
 
-<!-- Version 2.1 -->
+<!-- Version 4 -->
 <html lang="en">
 <head>
 <meta charset="utf-8"/>
@@ -8,41 +8,8 @@
 <title>Nomad • Movies</title>
 <link rel="stylesheet" href="assets/plyr.css" />
 <link rel="stylesheet" href="/master.css">
-<script>
-(function() {
-  try {
-    const isDark = localStorage.getItem('nomad_dark_mode') === 'true';
-    if (isDark) document.documentElement.classList.add('dark');
-
-    const saved = localStorage.getItem('nomad_custom_theme');
-    if (saved) {
-      const colors = JSON.parse(saved);
-      const style = document.createElement('style');
-      style.id = 'custom-theme-style';
-      style.textContent = `
-        :root {
-          --primary: ${colors.primary} !important;
-          --primary-dark: ${colors.primaryDark} !important;
-          --bg: ${colors.bgLight} !important;
-          --card: ${colors.cardLight} !important;
-          --card-bg: ${colors.cardLight} !important;
-          --text: ${colors.textLight} !important;
-          --muted: ${colors.mutedLight} !important;
-        }
-        body.dark {
-          --bg: ${colors.bgDark} !important;
-          --card: ${colors.cardDark} !important;
-          --card-bg: ${colors.cardDark} !important;
-          --text: ${colors.textDark} !important;
-          --muted: ${colors.mutedDark} !important;
-          --primary: ${colors.primaryDarkTheme} !important;
-        }
-      `;
-      document.head.appendChild(style);
-    }
-  } catch(e) {}
-})();
-</script>
+<script src="/theme-boot.js"></script>
+<script src="/nomad-utils.js"></script>
 <script src="assets/plyr.min.js"></script>
 <script src="/theme-manager.js"></script>
 
@@ -162,12 +129,14 @@
     cursor:pointer;
     transition:background-color .18s ease, color .18s ease;
   }
+  .modal button { width:100%; font-weight:600; }
   .modal button:not(.cancel):not(.secondary) {
     background:var(--primary);
     color:var(--color-white);
   }
-  .modal button.secondary { background:var(--btn-light-bg); color:var(--primary); border:1px solid var(--primary-alpha-12); }
-  .modal button.cancel { background:var(--color-white); color:var(--text-dark-gray); border:1px solid var(--line); }
+  /* resume = outlined accent, download/cancel = outlined muted. tokens flip for dark on their own */
+  .modal button.secondary { background:transparent; color:var(--primary); border:1px solid var(--primary); }
+  .modal button.cancel { background:transparent; color:var(--text); border:1px solid var(--line); }
 
   .video-modal-content {
     background: var(--card-bg);
@@ -211,8 +180,7 @@
     color: var(--text);
     border: 1px solid var(--white-alpha-3);
   }
-  body.dark .modal button.secondary { background: var(--white-alpha-2); color: #d9eefc; border:1px solid var(--white-alpha-4); }
-  body.dark .modal button.cancel { background: var(--white-alpha-2); color:#d9eefc; border:1px solid var(--white-alpha-4); }
+  /* modal button colors come from the theme tokens above, no dark overrides needed */
   body.dark .video-modal { background: rgba(0,0,0,0.88); }
   body.dark .video-modal-content {
     background: #071018;
@@ -334,60 +302,8 @@ let currentMovie = null;
 let autosaveTimer = null;
 let rootSig = null;
 
-/* ---------- Screen wake lock / NoSleep fallback ---------- */
-/* Place this right after your "State" declarations */
-let wakeLock = null;
-let noSleep = null; // used if NoSleep.js is loaded
-
-async function requestWakeLock(){
-  try {
-    // Preferred: Screen Wake Lock API (modern browsers)
-    if('wakeLock' in navigator){
-      if(!wakeLock){
-        wakeLock = await navigator.wakeLock.request('screen');
-        // clear reference if UA releases the lock
-        wakeLock.addEventListener && wakeLock.addEventListener('release', () => { wakeLock = null; });
-      }
-      return true;
-    }
-
-    // Fallback: NoSleep.js (if included via script tag)
-    if(window.NoSleep){
-      if(!noSleep) noSleep = new NoSleep();
-      try { noSleep.enable(); } catch(e){ console.warn('NoSleep.enable() failed', e); }
-      return true;
-    }
-
-    // Nothing available
-    console.warn('No Wake Lock API or NoSleep available — screen may still sleep.');
-    return false;
-  } catch(e){
-    console.warn('requestWakeLock error', e);
-    // last-ditch NoSleep attempt
-    if(window.NoSleep){
-      try { if(!noSleep) noSleep = new NoSleep(); noSleep.enable(); return true; } catch(e2){}
-    }
-    return false;
-  }
-}
-
-async function releaseWakeLock(){
-  try {
-    if(wakeLock){
-      try { await wakeLock.release(); } catch(e){}
-      wakeLock = null;
-    }
-    if(noSleep){
-      try { noSleep.disable(); } catch(e){}
-    }
-  } catch(e){
-    console.warn('releaseWakeLock error', e);
-  }
-}
-
 
 /* Helpers */
-function normalizePath(p){ if(!p) return '/'; if(!p.startsWith('/')) p='/' + p; while(p.length>1 && p.endsWith('/')) p=p.slice(0,-1); return p; }
 function ext(name){ const i=name.lastIndexOf('.'); return i>=0? name.slice(i).toLowerCase() : ''; }
 function isVideoName(n){ return VIDEO_EXTS.includes(ext(n)); }
 function isImageName(n){ return IMAGE_EXTS.includes(ext(n)); }
@@ -1277,5 +1193,4 @@ window.addEventListener('hashchange', ()=> handleHashNavigation(getHashParam()))
 </script>
 </body>
 </html>
-
 
