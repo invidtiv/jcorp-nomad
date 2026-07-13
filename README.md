@@ -1,7 +1,7 @@
 # <div align="center">Jcorp Nomad</div>
 
 <div align="center">
-  <img src="NomadCoverMK4.png" alt="Jcorp Nomad Offline Media Server" width="800">
+  <img src="NomadCoverMK4v2.png" alt="Jcorp Nomad Offline Media Server" width="800">
 </div>
 
 <p align="center"><b>A portable, offline media server powered by the ESP32-S3 in a thumbdrive form factor.</b><br>
