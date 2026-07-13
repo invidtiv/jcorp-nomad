@@ -8,10 +8,10 @@
 Stream movies, music, books, and shows anywhere - no internet required.</p>
 
 <p align="center">
-  <img src="https://img.shields.io/badge/release-Mk3-red.svg" alt="Release: Mk3" />
+  <img src="https://img.shields.io/badge/release-Mk4-red.svg" alt="Release: Mk4" />
   <img src="https://img.shields.io/badge/license-CC--BY--NC--SA%204.0-blue.svg" alt="License: CC BY-NC-SA 4.0" />
   <img src="https://img.shields.io/badge/platform-ESP32--S3-orange" alt="Platform: ESP32-S3" />
-  <img src="https://img.shields.io/badge/status-stable-brightgreen" alt="Status: Stable" />
+  <img src="https://img.shields.io/badge/status-beta-yellow" alt="Status: Beta" />
 </p>
 
 <p align="center">
@@ -21,7 +21,7 @@ Stream movies, music, books, and shows anywhere - no internet required.</p>
 
 ---
 
-> **Mk3 Release** - The experimental branch has been merged into main. This is the new stable baseline with all Mk3 features. Testing is ongoing, but everything is running stable so far.
+> **Mk4 Release** - A big one. Full offline Wikipedia support, a redesigned case, and a long list of stability fixes under the hood. This update touches both firmware and frontend, so a reflash is required coming from Mk3. Still semi-stable while I iron out edge cases, but everything core is working well.
 
 ---
 
@@ -43,7 +43,7 @@ I strongly recommend building your own Nomad. It's not a very difficult project,
 
 That said, I also won't say no to money. If you'd rather skip the DIY and get a ready-to-go unit, prebuilt Nomads are available at **[nomad.jcorptech.net](https://nomad.jcorptech.net)**.
 
-Every Nomad, whether you build it or buy it, runs the same open-source firmware and web interface. When new features and updates are released, you can always flash the latest code yourself to stay up to date. This project isn't going anywhere.
+Every Nomad, whether you build it or buy it, runs the same open-source firmware and web interface. When new features and updates are released, you can always flash the latest code yourself to stay up to date. This project isn't going anywhere. 
 
 ### Support Development
 
@@ -52,32 +52,42 @@ If you just want to support the project, donations are always appreciated:
 
 ---
 
-## Mk3 Highlights
+## Mk4 Highlights
 
-### Plyr Integration
-- Replaced native browser video elements with the **Plyr** library
-- Consistent playback UI across all devices
-- Fixes playback issues on Apple hardware
+### Offline Wikipedia & Archive Support (ZIM)
+- Browse and search full offline Wikipedia (and other ZIM archives like Gutenberg and TED) directly from the SD card
+- Search is fast even on massive archives, a companion tool prebuilds a compact index on your PC, so the device never has to search the raw multi-gigabyte file itself
+- Embedded videos and epub books inside archives play/read right in the browser
+- Works with zero extra UI cost if you don't use it, no archives on the card means the feature stays completely out of the way
+- Currently tested with Gutenburg epubs, TedX Videos, and wikipedia from the tiny 0.8 file all the way to the 140gb maxi with images. 
 
-### Theme Customization
-- New **Theme Control Panel** in the Admin Console
-- Expanded to **28 preset themes** 
-- Full **custom theme editor** for manual color adjustments
-- Mobile-optimized with compact layout and touch-friendly controls
+### Redesigned Case
+<p align="center">
+  <img src="NomadMk4Explode.png" alt="Nomad Mk4 exploded case view" width="700">
+</p>
 
-### Music Overhaul & Queue
-- Seamless playback across Songs, Playlists, and Queue
-- New **Queue system** - add tracks from any music page, reorder or remove dynamically
-- Search results link directly to the queue
+- New case slides together **front-to-back** instead of the old top-to-bottom design
+- No more direct pressure on the screen, which was a common cause of cracked/broken screens on the old case
+- Buttons stay exposed on the outside, so you can still flash firmware or hit the boot button without disassembling anything
 
-### Books & Comics
-- **PDF Viewer** - dedicated page with **progressive loading** for large files
-- **EPUB Reader** - cleaned up and stable, prevents crashes on low-memory devices (still not recommended over PDF, but it works)
-- **Comic Reader** - supports webtoon **infinite scroll** and standard page mode, works with raw CBZ files
+- Based on a remix of [ESP32 C6 with LCD Screen Enclosure Case](https://makerworld.com/en/models/2121443-esp32-c6-with-lcd-screen-enclosure-case) on MakerWorld by [**Adrian**](https://makerworld.com/en/@user_1765744671), full credit to the original design this was built on
 
-### Search & Performance
-- Menu search uses **cached indices** for much faster results
-- Themes loaded from `/.system-theme.json` for system-wide consistency
+### Indexing & Stability
+- Root-caused and fixed a long-standing random reboot bug tied to files over 2GB, this was the actual cause of crashes on image-heavy Wikipedia pages and big movie scrubbing
+- Fixed a heap-corruption crash that could hit when indexing and refreshing SD totals at the same time
+- Boot-time indexing now only re-scans when files have actually changed, instead of a full scan on every boot
+- Removed the screens loading spinner that was silently forcing a full-screen redraw every loop, pulling it out made the whole device noticeably more stable
+
+### Reader & Memory Improvements
+- Comic and PDF readers now free old pages from memory as you scroll, fixing crashes on long comics and scanned PDFs
+- PDF viewer shows a real loading percentage instead of a blank screen
+- Cleaned out a bunch of dead code and unused libraries that were loading on every Books page
+
+### UI & Admin Updates
+- Unified header and button styling across pages so themes apply consistently everywhere
+- Fixed several dark mode readability bugs (unreadable resume text, buttons that ignored custom themes, etc.)
+- Admin panel settings are now gated behind a login
+- Fixed a stuck brightness slider caused by an out-of-range default value
 
 ### Default Themes (28)
 
@@ -92,7 +102,8 @@ Burgundy Wine, Teal Oasis
 
 ## Features
 
-- **Admin Panel:** Full device controls, library indexing, Theme Customizer.
+- **Offline Encyclopedia:** ZIM archive support for offline Wikipedia and other offline wikis, with fast on-device search.
+- **Admin Panel:** Full device controls, library indexing, Theme Customizer, login-gated settings.
 - **File Browser:** Upload, rename, delete, download, and inline file editing. (Recommended to use a PC)
 - **Global Search:** Quickly find media across all categories from the Menu page.
 - **Music Player:** Seamless background playback with subdirectory playlists and a dynamic Queue.
@@ -110,7 +121,7 @@ Burgundy Wine, Teal Oasis
 
 Nomad is built specifically for the **Waveshare ESP32-S3 Dev Board (1.47" LCD version)**. Due to the number of low-level tricks used to squeeze this much functionality out of the hardware, it is difficult to get Nomad running on other boards.
 
-There are a few community forks that target other ESP32 boards, but your mileage will vary. Now that Nomad is stable on Mk3, I plan to develop a **Nomad Lite** version with wider board compatibility, focused on basic streaming without all the advanced features.
+There are a few community forks that target other ESP32 boards, but your mileage will vary. I'm also actively working on a **Nomad Lite** version with wider board compatibility, focused on basic streaming without all the advanced features.
 
 ---
 
@@ -158,6 +169,7 @@ There are a few community forks that target other ESP32 boards, but your mileage
    - Non-blocking, background indexing for large libraries.
    - Safe on power loss; partial indexes remain intact.
    - Auto-updates changes; frontend detects updates automatically.
+   - Boot-time indexing now only triggers on an actual file change, not every boot.
 
 2. **Resume Functionality**
    - Movies and Shows track playback progress.
@@ -166,15 +178,18 @@ There are a few community forks that target other ESP32 boards, but your mileage
 
 3. **Dark Mode**
    - Toggleable across all pages from the menu.
+   - Consistent theme tokens across pages, no more mismatched dark colors.
 
 4. **Admin Page**
    - Full device control: shutdown, restart, flash mode, Wi-Fi, RGB LEDs, brightness, credentials, indexing, and file management.
+   - Login-gated settings so changes require the admin password.
    - Safe shutdown option for SD card health.
    - Real-time system console feedback.
 
 5. **Stability Improvements**
    - Fixed frontend NDJSON sync issues.
    - Crash recovery on large indexes.
+   - Fixed a random-reboot bug tied to files over 2GB.
    - Dynamic LCD brightness adjustment.
    - Streaming stability enhancements.
 
@@ -246,6 +261,7 @@ books.html
 music.html
 gallery.html
 files.html
+archive.html
 Logo.png
 favicon.ico
 ```
@@ -254,26 +270,31 @@ favicon.ico
 
 ## Supported Formats
 
-- **Video:** `.mp4, .mov, .mkv, .webm`
-- **Audio:** `.mp3, .flac, .wav`
-- **Books:** `.pdf, .epub, .mp3, .cbz`
-- **Images:** `.jpg`
+- **Video:** `.mp4, .webm, .m4v, .mov, .mkv, .ts, .m2ts` 
+- **Audio:** `.mp3, .flac, .wav, .ogg, .aac, .m4a`
+- **Books:** `.pdf, .epub, .cbz, .cbr` 
+- **Images:** `.jpg, .jpeg, .png` 
+- **Archives:** `.zim` (offline Wikipedia and other ZIM-format wikis), needs special processing, you cant just drop a .zim in sadly
 
 ---
 
+
 ## 3D Printed Case Files
 
-- [Thingiverse](https://www.thingiverse.com/thing:7223398)
+The Mk4 default case is a remix of [ESP32 C6 with LCD Screen Enclosure Case](https://makerworld.com/en/models/2121443-esp32-c6-with-lcd-screen-enclosure-case) on MakerWorld, credit to [**Adrian**](https://makerworld.com/en/@user_1765744671) for the original design. It's a front-to-back slide design that keeps pressure off the screen while still exposing the buttons for firmware access.
+
+- Mk4 case files: in this repo
+- Original Mk3 top/bottom case (still works, just more prone to screen pressure): [Thingiverse](https://www.thingiverse.com/thing:7223398)
 
 ---
 
 ## What's Next
 
-**Nomad Lite** - A stripped-down version of Nomad with wider board compatibility, focused on core streaming features. Now that Mk3 is stable, this is the next priority.
+**Nomad Lite** - A stripped-down version of Nomad with wider board compatibility, focused on core streaming features. In active development now that Mk4 is out.
 
-**Nomad Manager** - A companion application for Nomad that integrates with Jellyfin to handle automated media downcoding and transfers. Keep your Nomad stocked and ready to go without manual file management.
+**Nomad Manager** - A companion application for Nomad that integrates with Jellyfin to handle automated media downcoding and transfers, and builds the offline archive indexes used by the ZIM reader. Keep your Nomad stocked and ready to go without manual file management.
 
-**Gallion** - A larger-scale sibling to Nomad, built on more capable hardware. Gallion is designed to handle everything that couldn't fit on Nomad's current platform > ZIM file support, ROM emulation, 4k video, and expanded media compatibility across the board. The current version is [here](https://github.com/Jstudner/Gallion).
+**Gallion** - A larger-scale sibling to Nomad, built on more capable hardware. Gallion is designed to handle everything that couldn't fit on Nomad's current platform > ROM emulation, 4k video, and expanded media compatibility across the board. The current version is [here](https://github.com/Jstudner/Gallion).
 
 ---
 
@@ -302,6 +323,7 @@ The ESP32-S3 provides enough performance to handle these requirements efficientl
 ## Credits
 
 Developed by **Jackson Studner (Jcorp Tech)**.
+Mk4 case design based on a remix of [**Adrian**](https://makerworld.com/en/@user_1765744671)'s [ESP32 C6 LCD Screen Enclosure Case](https://makerworld.com/en/models/2121443-esp32-c6-with-lcd-screen-enclosure-case) on MakerWorld.
 Inspired by open-source offline media projects. Contributions via PRs welcome.
 
 <p align="center">
