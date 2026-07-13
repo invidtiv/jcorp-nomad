@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<!-- Version 4 -->
+<!-- Version 2.3 -->
 <html lang="en">
 <head>
     <link rel="stylesheet" href="/master.css">
@@ -631,7 +631,7 @@
   <!-- Header -->
   <header class="header">
     <h1>Admin Panel</h1>
-    <a href="http://192.168.4.1/menu" class="menu-button">← Back</a>
+    <a href="/menu" class="menu-button">← Back</a>
   </header>
 
   <!-- Action Bar -->
@@ -731,15 +731,22 @@
         </div>
       </div>
 
-      <!-- LCD Brightness -->
+      <!-- LCD Display -->
       <div class="card">
-        <h2>LCD Brightness</h2>
+        <h2>LCD Display</h2>
         <div class="form-group">
           <label class="form-label">Brightness Level</label>
           <input type="range" id="brightness" class="form-control" min="1" max="100"
                  oninput="updateBrightnessLabel(this.value)"
                  onchange="setBrightness(this.value)">
           <div id="brightness-percent" style="text-align: center; font-weight: 600; margin-top: 0.5rem;">--%</div>
+        </div>
+        <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 1rem;">
+          <label class="form-label" style="margin: 0;">Flip screen 180&deg; (upside-down mount):</label>
+          <label class="toggle-switch">
+            <input type="checkbox" id="flip-screen">
+            <span class="slider"></span>
+          </label>
         </div>
         <button id="lcd-toggle" class="btn btn-secondary" style="width: 100%;">Off</button>
       </div>
@@ -839,7 +846,7 @@
       <div class="card file-browser-section">
         <h2>File Browser</h2>
         <div class="file-browser-disclaimer">
-          <strong>Note:</strong> The file browser is a backup method for quick edits. For best results, remove the SD card and edit files directly from your PC.
+          <strong>⚠️ Note:</strong> The file browser is a backup method for quick edits. For best results, remove the SD card and edit files directly from your PC.
         </div>
         <div class="file-browser">
           <iframe id="filebrowser-iframe" src="/filebrowser" title="File Browser"></iframe>
@@ -855,3 +862,4 @@
   <script src="admin.js"></script>
 </body>
 </html>
+
