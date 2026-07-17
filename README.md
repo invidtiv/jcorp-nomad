@@ -70,7 +70,7 @@ If you just want to support the project, donations are always appreciated:
 - No more direct pressure on the screen, which was a common cause of cracked/broken screens on the old case
 - Buttons stay exposed on the outside, so you can still flash firmware or hit the boot button without disassembling anything
 
-- Based on a remix of [ESP32 C6 with LCD Screen Enclosure Case](https://makerworld.com/en/models/2121443-esp32-c6-with-lcd-screen-enclosure-case) on MakerWorld by [**Adrian**](https://makerworld.com/en/@user_1765744671), full credit to the original design this was built on
+- Based on a remix of [ESP32 C6 with LCD Screen Enclosure Case](https://makerworld.com/en/models/2121443-esp32-c6-with-lcd-screen-enclosure-case) on MakerWorld by [**Adrian**](https://makerworld.com/en/@user_1765744671), full credit to the original design this was based off of.
 
 ### Indexing & Stability
 - Root-caused and fixed a long-standing random reboot bug tied to files over 2GB, this was the actual cause of crashes on image-heavy Wikipedia pages and big movie scrubbing
@@ -323,7 +323,6 @@ The ESP32-S3 provides enough performance to handle these requirements efficientl
 ## Credits
 
 Developed by **Jackson Studner (Jcorp Tech)**.
-Mk4 case design based on a remix of [**Adrian**](https://makerworld.com/en/@user_1765744671)'s [ESP32 C6 LCD Screen Enclosure Case](https://makerworld.com/en/models/2121443-esp32-c6-with-lcd-screen-enclosure-case) on MakerWorld.
 Inspired by open-source offline media projects. Contributions via PRs welcome.
 
 <p align="center">
