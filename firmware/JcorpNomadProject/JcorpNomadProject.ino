@@ -1,14 +1,11 @@
 // Jcorp Nomad Backend
-//<!-- Version 4.2.1 -->
+//<!-- Version 4.2.2 -->
 #include <Arduino.h>
 #include <WiFi.h>
 #include <esp_netif.h>
 #include <esp_heap_caps.h>
 #include <AsyncTCP.h>
 #include <ESPAsyncWebServer.h>
-#include <SdFat.h>
-SdExFat sd;
-ExFatFile file;
 #include <DNSServer.h>
 #include <ESPmDNS.h>
 #include <ArduinoJson.h>
@@ -340,14 +337,10 @@ static bool shouldSkipIndexingPath(const String &path) {
   return false;
 }
 
-// START: SD compatibility alias
-// NomadSD replaces SD_MMC: same SDMMC pins/peripheral, but the filesystem
-// layer is SdFat, which auto-detects exFAT as well as FAT32 (see NomadSD.h).
-// The define keeps every existing SD_MMC.* call site compiling unchanged.
-#include "NomadSD.h"
-#define SD_MMC NomadSD
+// START: SD_MMC compatibility alias
+#include <SD_MMC.h>
 #ifndef SD
-#define SD NomadSD
+#define SD SD_MMC
 #endif
 #define INDEXER_SLEEP_MS 300000 // 5 minutes between background scans
 #define MAX_CLIENTS 8 // SoftAP max_connection; keep in sync with WiFi.softAP() calls below
@@ -1357,12 +1350,14 @@ bool tryRecoverSDCard() {
         return ok;
     }
 
-    // couldnt get the stream map (something wedged holding it), remount under sdMutex alone
-    if (sdMutex) xSemaphoreTake(sdMutex, pdMS_TO_TICKS(3000));
+    // couldnt get the stream map (something wedged holding it), remount under sdMutex alone.
+    // give back only what we took - releasing a mutex we don't hold frees it under its owner
+    bool sdTaken = (!sdMutex) || (xSemaphoreTake(sdMutex, pdMS_TO_TICKS(3000)) == pdTRUE);
+    if (!sdTaken) Serial.println("[SD] Recovery: sdMutex timeout, remounting without it.");
     SD_MMC.end();
     delay(1000);
     bool ok = SD_MMC.begin("/sdcard", true, false, SDMMC_FREQ_DEFAULT, 12);
-    if (sdMutex) xSemaphoreGive(sdMutex);
+    if (sdTaken && sdMutex) xSemaphoreGive(sdMutex);
     Serial.println(ok ? "[SD] Recovery OK." : "[SD] Recovery failed.");
     return ok;
 }
@@ -1880,7 +1875,12 @@ void handleRangeRequest(AsyncWebServerRequest *request) {
     headResponse->addHeader("Content-Length", String(fileSize));
     headResponse->addHeader("Cache-Control", "public, max-age=3600");
     headResponse->addHeader("Pragma", "no-cache");
-    file.close();
+    // close under sdMutex like every other SD op; this one used to run bare
+    {
+      bool sdTaken = (!sdMutex) || (xSemaphoreTake(sdMutex, pdMS_TO_TICKS(2000)) == pdTRUE);
+      file.close();
+      if (sdTaken && sdMutex) xSemaphoreGive(sdMutex);
+    }
     request->send(headResponse);
     return;
   }
@@ -1956,9 +1956,13 @@ void handleRangeRequest(AsyncWebServerRequest *request) {
     shutdownBackgroundTasksForStreaming();
   }
 
-  if (sdMutex) xSemaphoreTake(sdMutex, pdMS_TO_TICKS(2000));
-  file.close();
-  if (sdMutex) xSemaphoreGive(sdMutex);
+  // the take can time out on a busy card; an unconditional give would release
+  // IndexWorker's lock. closing our own handle unlocked is fine in that rare case.
+  {
+    bool sdTaken = (!sdMutex) || (xSemaphoreTake(sdMutex, pdMS_TO_TICKS(2000)) == pdTRUE);
+    file.close();
+    if (sdTaken && sdMutex) xSemaphoreGive(sdMutex);
+  }
 
   uint32_t streamId = 0;
   if (streamingFilesMutex && xSemaphoreTake(streamingFilesMutex, pdMS_TO_TICKS(300)) == pdTRUE) {
@@ -4243,7 +4247,7 @@ if (!SD_MMC.begin("/sdcard", true, false, SDMMC_FREQ_DEFAULT, 12)) {
 
 Serial.println("SD Card initialized successfully!");
 
-    webLogf("success", "SD Card initialized successfully - %s, Size: %.1f GB", NomadSD.fsTypeName(), (float)SD_MMC.cardSize() / (1024.0 * 1024.0 * 1024.0));
+    webLogf("success", "SD Card initialized successfully - Size: %.1f GB", (float)SD_MMC.cardSize() / (1024.0 * 1024.0 * 1024.0));
 
     refreshCachedTotalsFromStat();
 
@@ -4875,7 +4879,14 @@ Serial.println("SD Card initialized successfully!");
             url.startsWith("/Movies") || url.startsWith("/Music") || url.startsWith("/Books") ||
             url.startsWith("/Shows") || url.startsWith("/Archive") || url.startsWith("/Games") ||
             url.startsWith("/Maps")) {
-            
+
+            // ex-serveStatic buckets: route them through handleRangeRequest so reads
+            // stay under sdMutex. Only these two - root pages must serve during indexing.
+            if (url.startsWith("/Gallery/") || url.startsWith("/Files/")) {
+                handleRangeRequest(request);
+                return;
+            }
+
             // Handle as file request with SD mutex protection
             String filePath = url;
             if (!filePath.startsWith("/")) filePath = "/" + filePath;
@@ -4937,10 +4948,8 @@ Serial.println("SD Card initialized successfully!");
     
     request->send(SD_MMC, "/index.html", "text/html");
 });
-    server.serveStatic("/Gallery", SD_MMC, "/Gallery")
-          .setCacheControl("max-age=86400");
-    server.serveStatic("/Files", SD_MMC, "/Files")
-          .setCacheControl("max-age=86400");
+    // /Gallery and /Files were serveStatic mounts - the only SD reads with no
+    // sdMutex, no busy-503 and no OOM guard. Now handled in onNotFound instead.
 server.on(
   "/upload", HTTP_POST,
   // Final response when upload is complete
@@ -5102,6 +5111,8 @@ server.on("^\\/Archive\\/.*$", HTTP_ANY, [](AsyncWebServerRequest *request){
   Serial.printf("[ARCHIVE ROUTE ANY] delegating to handleRangeRequest for %s (method=%d)\n", request->url().c_str(), request->method());
   handleRangeRequest(request);
 });
+// NOTE: the regex routes above need ASYNCWEBSERVER_REGEX, which this build doesn't
+// define - they never match, so /Books and /Archive fall through to onNotFound.
 
 
 server.on("/save", HTTP_POST, [](AsyncWebServerRequest *request){
