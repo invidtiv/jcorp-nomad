@@ -3410,9 +3410,16 @@ void applyRGBSettings() {
 // captive DNS alone doesn't cover it. Must be restarted whenever the AP
 // interface is torn down (softAPdisconnect kills the responder's netif).
 const char* MDNS_HOSTNAME = "nomad";
+// MDNS.end() is an unguarded mdns_free(), so calling it before the first
+// begin() panics. Only tear down a responder we actually started.
+static bool mdnsStarted = false;
 void startNomadMDNS() {
-  MDNS.end();  // safe no-op if not running; required before re-begin after AP restart
+  if (mdnsStarted) {
+    MDNS.end();  // required before re-begin after an AP restart
+    mdnsStarted = false;
+  }
   if (MDNS.begin(MDNS_HOSTNAME)) {
+    mdnsStarted = true;
     MDNS.addService("http", "tcp", 80);
     Serial.printf("[mDNS] Responder started: http://%s.local/\n", MDNS_HOSTNAME);
   } else {
