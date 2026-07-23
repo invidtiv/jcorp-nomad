@@ -144,6 +144,12 @@ There are a few community forks that target other ESP32 boards, but your mileage
 ## Software Requirements
 
 - Arduino IDE
+- Arduino Librarys, EXACT VERSIONS:
+"ArduinoJson" by Benoit Blanchon v7.3.0,
+"Async TCP" by ESP32Async v3.4.7,
+"ESP Async Webserver" by ESP32Async v3.7.1,
+"LVGL" by kisvegabor v8.3.10,
+"SDFat" by Bill Greiman v2.3.0,
 - Fat32Format or equivalent
 - SquareLine Studio (optional, for UI editing)
 
